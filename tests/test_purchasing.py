@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from rms import inventory, purchasing
 
 
@@ -52,3 +54,56 @@ def test_draft_pos_pooled_by_vendor_and_held_in_draft(conn):
     purchasing.approve_po(conn, po_ids[0])
     assert conn.execute("SELECT status FROM purchase_orders WHERE id = ?",
                         (po_ids[0],)).fetchone()[0] == "approved"
+
+
+def test_send_and_receive_po_restock_inventory_once(conn):
+    conn.execute("INSERT INTO vendors (id, name) VALUES ('vendor', 'Local Farm')")
+    conn.commit()
+    item = inventory.add_inventory_item(
+        conn, "Flour", "lb", current_stock=10, vendor_id="vendor",
+        avg_daily_usage=2, max_daily_usage=2, lead_time_days=10,
+        max_lead_time_days=10, par_level=30, pack_size=5)
+    po_id = purchasing.generate_draft_pos(conn)[0]
+
+    with pytest.raises(ValueError):
+        purchasing.receive_po(conn, po_id)  # draft POs cannot be received
+
+    purchasing.approve_po(conn, po_id)
+    purchasing.mark_po_sent(conn, po_id)
+    received = purchasing.receive_po(conn, po_id)
+
+    assert inventory.get_stock(conn, item) == 30.0  # four 5 lb packs added
+    assert len(received) == 1 and received[0]["delta"] == 20.0
+    row = conn.execute(
+        "SELECT delta, reason, reference_id FROM inventory_transactions"
+        " WHERE reference_id = ?", (po_id,)).fetchone()
+    assert tuple(row) == (20.0, "restock", po_id)
+    assert conn.execute("SELECT status FROM purchase_orders WHERE id = ?",
+                        (po_id,)).fetchone()[0] == "received"
+    with pytest.raises(ValueError):
+        purchasing.receive_po(conn, po_id)  # cannot double-count a delivery
+    assert inventory.get_stock(conn, item) == 30.0
+
+
+def test_receive_po_is_atomic_when_any_line_is_invalid(conn):
+    conn.execute("INSERT INTO vendors (id, name) VALUES ('vendor', 'Local Farm')")
+    conn.commit()
+    first = inventory.add_inventory_item(conn, "Rice", "lb", current_stock=2)
+    second = inventory.add_inventory_item(conn, "Oil", "gal", current_stock=3)
+    po_id = "po-invalid-line"
+    conn.execute("INSERT INTO purchase_orders (id, vendor_id, status)"
+                 " VALUES (?, 'vendor', 'sent')", (po_id,))
+    conn.execute("INSERT INTO po_items (id, po_id, inventory_item_id, quantity_packs, unit_price)"
+                 " VALUES ('line-ok', ?, ?, 2, 1)", (po_id, first))
+    conn.execute("UPDATE inventory_items SET pack_size = 0 WHERE id = ?", (second,))
+    conn.execute("INSERT INTO po_items (id, po_id, inventory_item_id, quantity_packs, unit_price)"
+                 " VALUES ('line-invalid', ?, ?, 2, 1)", (po_id, second))
+    conn.commit()
+
+    with pytest.raises(ValueError, match="pack size"):
+        purchasing.receive_po(conn, po_id)
+
+    assert inventory.get_stock(conn, first) == 2.0
+    assert conn.execute("SELECT COUNT(*) FROM inventory_transactions").fetchone()[0] == 0
+    assert conn.execute("SELECT status FROM purchase_orders WHERE id = ?",
+                        (po_id,)).fetchone()[0] == "sent"

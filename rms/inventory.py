@@ -44,9 +44,8 @@ def _record_ledger(conn, inventory_item_id: str, delta: float, reason: str,
     return tx_id
 
 
-def deduct_for_order(conn, order_id: str) -> list:
-    """On ticket closure, deduct raw ingredients per the BOM and log each
-    deduction immutably. Returns the ledger entries created."""
+def _deduct_for_order(conn, order_id: str) -> list:
+    """Apply BOM deductions without committing, for use inside transactions."""
     entries = []
     items = conn.execute("SELECT * FROM order_items WHERE order_id = ?", (order_id,)).fetchall()
     for item in items:
@@ -61,6 +60,16 @@ def deduct_for_order(conn, order_id: str) -> list:
             entries.append({"transaction_id": tx_id,
                             "inventory_item_id": comp["inventory_item_id"],
                             "delta": delta})
+    return entries
+
+
+def deduct_for_order(conn, order_id: str) -> list:
+    """Deduct recipe ingredients and create immutable ledger rows.
+
+    Callers that need additional writes to be atomic with the deduction should
+    use a savepoint around the full operation.
+    """
+    entries = _deduct_for_order(conn, order_id)
     conn.commit()
     return entries
 

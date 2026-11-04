@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6f8">
+  <title>RMS — Restaurant Operations</title>
+  <link rel="stylesheet" href="/assets/app.css">
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <div id="login-screen" class="login-screen hidden">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark large">R</div>
+      <p class="eyebrow">RESTAURANT MANAGEMENT</p>
+      <h1>Welcome back</h1>
+      <p class="muted">Sign in with the administrator password configured for this service.</p>
+      <label for="login-password">Administrator password</label>
+      <input id="login-password" type="password" autocomplete="current-password" required>
+      <p id="login-error" class="error-text hidden" role="alert"></p>
+      <button class="button primary full" type="submit">Sign in <span>→</span></button>
+      <p class="login-footnote">Secure production session · RMS</p>
+    </form>
+  </div>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="brand" href="#overview" aria-label="RMS home">
+        <span class="brand-mark">R</span>
+        <span class="brand-copy"><strong>rms</strong><small>RESTAURANT OS</small></span>
+      </a>
+      <div class="workspace-label">WORKSPACE</div>
+      <nav class="main-nav" aria-label="Main navigation">
+        <button class="nav-link active" data-view="overview"><span class="nav-icon">◫</span> Overview</button>
+        <button class="nav-link" data-view="pos"><span class="nav-icon">＋</span> Point of sale</button>
+        <button class="nav-link" data-view="kitchen"><span class="nav-icon">▤</span> Kitchen display <span id="kitchen-count" class="nav-count">0</span></button>
+        <button class="nav-link" data-view="inventory"><span class="nav-icon">▦</span> Inventory</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="service-status"><span class="status-dot"></span><span><strong>Service online</strong><small>Local restaurant</small></span></div>
+        <button id="logout-button" class="logout-button hidden">Sign out</button>
+        <div class="user-chip"><span class="avatar">RM</span><span><strong>Restaurant Manager</strong><small id="mode-label">Demo workspace</small></span><span class="more-dots">···</span></div>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div class="mobile-brand"><span class="brand-mark">R</span><strong>rms</strong></div>
+        <div class="breadcrumb"><span>Workspace</span><b>/</b><strong id="page-title">Overview</strong></div>
+        <div class="top-actions"><span id="today-label" class="today-label"></span><button class="icon-button" id="refresh-button" aria-label="Refresh data" title="Refresh">↻</button></div>
+      </header>
+      <div id="notice" class="notice hidden" role="status"></div>
+      <section id="view-root" class="view-root" aria-live="polite"></section>
+      <footer class="app-footer"><span>RMS · Restaurant operations</span><span>Cash-only demo · No card data stored</span></footer>
+    </main>
+  </div>
+</body>
+</html>

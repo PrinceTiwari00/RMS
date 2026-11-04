@@ -9,7 +9,7 @@ sub-station item is READY.
 from .menu import get_menu_item
 
 
-def route_order(conn, order_id: str) -> dict:
+def route_order(conn, order_id: str, *, commit: bool = True) -> dict:
     """On ORDER_FIRED, map each line item to its prep station. Returns
     {station: [order_item_id, ...]}."""
     routing = {}
@@ -17,12 +17,13 @@ def route_order(conn, order_id: str) -> dict:
     for item in items:
         menu = get_menu_item(conn, item["menu_item_id"])
         station = menu["default_station"]
-        # Course timing: appetizers route immediately, entrees HOLD until fired.
-        kds_status = "PENDING" if menu["course"] == "appetizer" else "HOLD"
+        # Only entrees are held; appetizers and drinks start immediately.
+        kds_status = "HOLD" if menu["course"] == "entree" else "PENDING"
         conn.execute("UPDATE order_items SET kds_status = ? WHERE id = ?",
                      (kds_status, item["id"]))
         routing.setdefault(station, []).append(item["id"])
-    conn.commit()
+    if commit:
+        conn.commit()
     return routing
 
 
@@ -34,9 +35,12 @@ def fire_entrees(conn, order_id: str) -> None:
 
 
 def mark_item_ready(conn, order_item_id: str) -> None:
-    """Prep cook double-taps a line item to mark it READY."""
-    conn.execute("UPDATE order_items SET kds_status = 'READY' WHERE id = ?",
-                 (order_item_id,))
+    """Mark a released kitchen line READY; held or unknown lines are rejected."""
+    changed = conn.execute(
+        "UPDATE order_items SET kds_status = 'READY'"
+        " WHERE id = ? AND kds_status = 'PENDING'", (order_item_id,)).rowcount
+    if not changed:
+        raise ValueError("kitchen item is not pending")
     conn.commit()
 
 

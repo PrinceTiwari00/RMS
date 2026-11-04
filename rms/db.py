@@ -21,8 +21,14 @@ def connect(path: str = ":memory:") -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    """Create the full blueprint schema."""
+    """Create or migrate the local schema safely on every app startup."""
     conn.executescript(SCHEMA_PATH.read_text())
+    order_columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+    if "table_id" not in order_columns:
+        conn.execute("ALTER TABLE orders ADD COLUMN table_id TEXT REFERENCES tables(id)")
+    payment_columns = {row["name"] for row in conn.execute("PRAGMA table_info(payments)")}
+    if "created_at" not in payment_columns:
+        conn.execute("ALTER TABLE payments ADD COLUMN created_at TIMESTAMP")
     conn.commit()
 
 

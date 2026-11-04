@@ -35,31 +35,36 @@ def get_table(conn, table_id: str):
     return conn.execute("SELECT * FROM tables WHERE id = ?", (table_id,)).fetchone()
 
 
-def _transition(conn, table_id: str, to_status: str) -> None:
+def _transition(conn, table_id: str, to_status: str, *, commit: bool = True) -> None:
     table = get_table(conn, table_id)
     if table is None:
         raise ValueError(f"table {table_id} not found")
-    if to_status not in ALLOWED_TRANSITIONS[table["status"]]:
-        raise ValueError(
-            f"illegal table transition {table['status']} -> {to_status}")
-    conn.execute("UPDATE tables SET status = ? WHERE id = ?", (to_status, table_id))
-    conn.commit()
+    from_status = table["status"]
+    if to_status not in ALLOWED_TRANSITIONS[from_status]:
+        raise ValueError(f"illegal table transition {from_status} -> {to_status}")
+    changed = conn.execute(
+        "UPDATE tables SET status = ? WHERE id = ? AND status = ?",
+        (to_status, table_id, from_status)).rowcount
+    if not changed:
+        raise ValueError("table status changed concurrently; refresh and retry")
+    if commit:
+        conn.commit()
 
 
-def seat_party(conn, table_id: str) -> None:      # Available -> Seated (tap to open ticket)
-    _transition(conn, table_id, "seated")
+def seat_party(conn, table_id: str, *, commit: bool = True) -> None:      # Available -> Seated
+    _transition(conn, table_id, "seated", commit=commit)
 
 
-def mark_ordered(conn, table_id: str) -> None:     # Seated -> Ordered (items sent to kitchen)
-    _transition(conn, table_id, "ordered")
+def mark_ordered(conn, table_id: str, *, commit: bool = True) -> None:     # Seated -> Ordered
+    _transition(conn, table_id, "ordered", commit=commit)
 
 
-def mark_billed(conn, table_id: str) -> None:      # Ordered -> Billed (check printed)
-    _transition(conn, table_id, "billed")
+def mark_billed(conn, table_id: str, *, commit: bool = True) -> None:      # Ordered -> Billed
+    _transition(conn, table_id, "billed", commit=commit)
 
 
-def pay_and_leave(conn, table_id: str) -> None:    # Billed -> Dirty (guest paid and left)
-    _transition(conn, table_id, "dirty")
+def pay_and_leave(conn, table_id: str, *, commit: bool = True) -> None:    # Billed -> Dirty
+    _transition(conn, table_id, "dirty", commit=commit)
 
 
 def clean(conn, table_id: str) -> None:            # Dirty -> Available (reset)
