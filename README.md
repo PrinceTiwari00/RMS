@@ -19,6 +19,9 @@ Offline-first Restaurant Management System, implemented per the **RMS Technical 
 | `rms/kds.py` | §6 KDS routing, entree HOLD, item-level READY, expo bump |
 | `rms/inventory.py` | §9 BOM recipe deduction + immutable `inventory_transactions` ledger |
 | `rms/purchasing.py` | §10 Safety stock / reorder point / pack math, vendor-pooled draft POs |
+| `rms/payments.py` | §4 EMV pre-auth, tip-adjust, store-and-forward with $500 risk limit (tokens only, never raw PAN) |
+| `rms/printing.py` | §8 ESC/POS ticket buffer, JetDirect port 9100 agent, 0x10 0x04 0x02 status poll, backup-printer reroute |
+| `rms/queues.py` | §12/§13 Job queue: 5 attempts, exponential backoff 5s→40s, dead-letter + manual retry, health board |
 | `rms/labor.py` | §11 Gross pay, 1.18 burden factor, labor cost %, rate copied at clock-in |
 | `rms/edi.py` | §13 ANSI X12 EDI 850 generation |
 
