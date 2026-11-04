@@ -1,33 +1,76 @@
-# RMS
+# RMS — Restaurant Management System
 
-Offline-first Restaurant Management System, implemented per the **RMS Technical Blueprint**.
+RMS combines the restaurant domain modules with a browser-based operations MVP.
+The web app uses the existing SQLite-backed domain logic for table service,
+kitchen tickets, inventory movements, and cash checkout.
 
-## Architecture principles (blueprint §1)
+## Product workflow
 
-- **Offline-first resilience** — POS terminals use a local embedded database (SQLite here); writes are queued in `sync_queue` and flushed via idempotent endpoints when connectivity returns.
-- **Distributed UUIDs** — every entity uses client-generated UUID v4; auto-increment is forbidden.
-- **Price-at-time mutability** — order line items and modifiers lock `price_at_time`; menu prices can change without touching historical financials.
+1. Open an available table and start a ticket.
+2. Add menu items and optional modifiers; the prices are snapshotted on the line.
+3. Send the ticket to the kitchen. Appetizers and drinks start immediately;
+   entrees remain on HOLD until fired.
+4. Mark each kitchen item READY, then complete a cash checkout.
+5. The sale closes atomically with recipe stock deductions and ledger entries;
+   the table becomes dirty until reset.
+6. Review stock and record received quantities or waste adjustments.
 
-## Modules
+The first run seeds a small sample menu, floor plan, recipes, inventory, and
+vendor. The UI is responsive and uses local assets only.
 
-| Module | Blueprint section |
-|---|---|
-| `rms/menu.py` | §2 Menu domain, modifiers |
-| `rms/orders.py` | §2/§14 Order lifecycle `open → sent_to_kitchen → closed`, `price_at_time` |
-| `rms/sync.py` | §3 Offline sync queue + JSON payload + idempotent FIFO flush |
-| `rms/tables.py` | §5 Floor-plan state machine (green/blue/amber/purple/red) |
-| `rms/kds.py` | §6 KDS routing, entree HOLD, item-level READY, expo bump |
-| `rms/inventory.py` | §9 BOM recipe deduction + immutable `inventory_transactions` ledger |
-| `rms/purchasing.py` | §10 Safety stock / reorder point / pack math, vendor-pooled draft POs |
-| `rms/payments.py` | §4 EMV pre-auth, tip-adjust, store-and-forward with $500 risk limit (tokens only, never raw PAN) |
-| `rms/printing.py` | §8 ESC/POS ticket buffer, JetDirect port 9100 agent, 0x10 0x04 0x02 status poll, backup-printer reroute |
-| `rms/queues.py` | §12/§13 Job queue: 5 attempts, exponential backoff 5s→40s, dead-letter + manual retry, health board |
-| `rms/labor.py` | §11 Gross pay, 1.18 burden factor, labor cost %, rate copied at clock-in |
-| `rms/edi.py` | §13 ANSI X12 EDI 850 generation |
-
-## Run
+## Run locally
 
 ```bash
-pip install pytest
-python3 -m pytest -q
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt pytest
+RMS_ENV=demo python3 app.py
 ```
+
+Open `http://localhost:8000`. The demo database is `rms.db` in the repository
+and is ignored by Git. Delete that file to reset demo data. Tests:
+
+```bash
+python -m pytest -q
+```
+
+## Deployment and safety boundary
+
+The `Procfile` starts Gunicorn in **production mode**, which fails closed unless
+both `RMS_ADMIN_PASSWORD` (at least 16 characters) and `RMS_SECRET_KEY` (at
+least 32 characters, stable across restarts) are configured. Set those only in
+your deployment platform's secret/environment settings, never in Git. Production
+API requests require the administrator session and CSRF token; session cookies
+are HTTP-only, SameSite=Lax, and Secure.
+
+This is a usable single-store MVP, not yet a production POS deployment:
+
+- Production login is a single shared administrator password; there are no
+  staff roles, individual audit identities, or login rate limiting.
+- The app uses an instance-local SQLite file. A hosted instance can be replaced
+  or scaled, so use a durable/shared database adapter and tested backups before
+  recording real restaurant transactions in the cloud.
+- Checkout is cash-only. No card numbers or card tokens are collected by this
+  UI; tax, tips, refunds, discounts, and split payments are not implemented.
+- The browser app requires connectivity to its server. The `rms.sync` module
+  models a local sync queue, but full browser-side offline POS operation is not
+  wired into this interface.
+- AWS infrastructure was not created. Confirm the project's selected Region
+  before provisioning any regional resources.
+
+## Domain modules
+
+| Module | Capability |
+|---|---|
+| `rms/menu.py` | Menu items and modifiers |
+| `rms/orders.py` | Order lifecycle and price-at-time snapshots |
+| `rms/sync.py` | Offline sync queue and FIFO flush |
+| `rms/tables.py` | Floor-plan state machine |
+| `rms/kds.py` | Kitchen routing, entree HOLD, item READY, expo state |
+| `rms/inventory.py` | Recipe deduction and inventory transaction ledger |
+| `rms/purchasing.py` | Reorder calculations and approve → send → receive PO workflow |
+| `rms/payments.py` | EMV/store-and-forward domain helpers plus cash checkout record |
+| `rms/printing.py` | ESC/POS ticket buffer and backup-printer routing |
+| `rms/queues.py` | Retryable job queue and dead-letter handling |
+| `rms/labor.py` | Clock-in/out and labor cost calculations |
+| `rms/edi.py` | ANSI X12 EDI 850 generation |

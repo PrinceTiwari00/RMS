@@ -89,6 +89,9 @@ doc = edi.build_edi_850({"po_num": "PO-1001", "sender": "REST001", "receiver": "
                          "items": [{"qty": 1, "price": "32.50", "sku": "BEEF-50LB"}]},
                         now=datetime(2026, 11, 4, 16, 55))
 print(doc)
+purchasing.mark_po_sent(conn, po_ids[0])
+received = purchasing.receive_po(conn, po_ids[0])
+print(f"  received delivery: {len(received)} stock item(s) updated; PO status is now received")
 
 hr("8. LABOR COST (shift close)")
 role = labor.add_role(conn, "Server", 15.00)

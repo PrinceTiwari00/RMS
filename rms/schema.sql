@@ -3,7 +3,7 @@
 -- All primary keys are client-generated UUID v4 (TEXT). Auto-increment is forbidden.
 
 -- MENU DOMAIN
-CREATE TABLE menu_items (
+CREATE TABLE IF NOT EXISTS menu_items (
     id TEXT PRIMARY KEY,                      -- UUID v4
     name VARCHAR(100) NOT NULL,
     base_price NUMERIC NOT NULL,              -- DECIMAL(10,2)
@@ -11,7 +11,7 @@ CREATE TABLE menu_items (
     course VARCHAR(20) DEFAULT 'entree',      -- 'appetizer' | 'entree' | 'drink' (KDS routing)
     default_station VARCHAR(50) DEFAULT 'grill'
 );
-CREATE TABLE modifiers (
+CREATE TABLE IF NOT EXISTS modifiers (
     id TEXT PRIMARY KEY,
     menu_item_id TEXT REFERENCES menu_items(id),
     name VARCHAR(100) NOT NULL,
@@ -19,13 +19,14 @@ CREATE TABLE modifiers (
 );
 
 -- ORDER DOMAIN
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
     status VARCHAR(20) NOT NULL,              -- 'open', 'sent_to_kitchen', 'closed'
     subtotal NUMERIC,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    table_id TEXT REFERENCES tables(id)
 );
-CREATE TABLE order_items (
+CREATE TABLE IF NOT EXISTS order_items (
     id TEXT PRIMARY KEY,
     order_id TEXT REFERENCES orders(id),
     menu_item_id TEXT REFERENCES menu_items(id),
@@ -33,7 +34,7 @@ CREATE TABLE order_items (
     price_at_time NUMERIC NOT NULL,           -- CRITICAL: locks price at time of sale
     kds_status VARCHAR(10) DEFAULT 'PENDING'  -- 'PENDING' | 'HOLD' | 'READY'
 );
-CREATE TABLE order_item_modifiers (
+CREATE TABLE IF NOT EXISTS order_item_modifiers (
     id TEXT PRIMARY KEY,
     order_item_id TEXT REFERENCES order_items(id),
     modifier_id TEXT REFERENCES modifiers(id),
@@ -41,14 +42,14 @@ CREATE TABLE order_item_modifiers (
 );
 
 -- TABLE MANAGEMENT (floor plan state machine)
-CREATE TABLE tables (
+CREATE TABLE IF NOT EXISTS tables (
     id TEXT PRIMARY KEY,
     label VARCHAR(50) NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'available'  -- available|seated|ordered|billed|dirty
 );
 
 -- OFFLINE-FIRST SYNC QUEUE
-CREATE TABLE sync_queue (
+CREATE TABLE IF NOT EXISTS sync_queue (
     sync_id TEXT PRIMARY KEY,                 -- e.g. "sync_987654"
     entity_type VARCHAR(50) NOT NULL,         -- e.g. "order"
     entity_id TEXT NOT NULL,
@@ -59,14 +60,14 @@ CREATE TABLE sync_queue (
 );
 
 -- INVENTORY & RECIPE (BOM) DOMAIN
-CREATE TABLE vendors (
+CREATE TABLE IF NOT EXISTS vendors (
     id TEXT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     preferred INTEGER DEFAULT 0,
     edi_enabled INTEGER DEFAULT 0,            -- EDI 850 over SFTP vs PDF email
     cutoff_time VARCHAR(5) DEFAULT '17:00'
 );
-CREATE TABLE inventory_items (
+CREATE TABLE IF NOT EXISTS inventory_items (
     id TEXT PRIMARY KEY,
     name VARCHAR(100),                        -- e.g. "Ground Beef"
     unit_of_measure VARCHAR(20),              -- e.g. "oz"
@@ -79,13 +80,13 @@ CREATE TABLE inventory_items (
     pack_size NUMERIC DEFAULT 1,              -- pack conversion factor (e.g. 800 oz per 50lb case)
     vendor_id TEXT REFERENCES vendors(id)
 );
-CREATE TABLE recipes (                        -- Bill of Materials junction
+CREATE TABLE IF NOT EXISTS recipes (                        -- Bill of Materials junction
     menu_item_id TEXT REFERENCES menu_items(id),
     inventory_item_id TEXT REFERENCES inventory_items(id),
     quantity_required NUMERIC,                -- e.g. 6.00 oz
     PRIMARY KEY (menu_item_id, inventory_item_id)
 );
-CREATE TABLE inventory_transactions (         -- immutable audit ledger
+CREATE TABLE IF NOT EXISTS inventory_transactions (         -- immutable audit ledger
     id TEXT PRIMARY KEY,
     inventory_item_id TEXT REFERENCES inventory_items(id),
     delta NUMERIC NOT NULL,                   -- negative for deductions
@@ -95,13 +96,13 @@ CREATE TABLE inventory_transactions (         -- immutable audit ledger
 );
 
 -- PURCHASE ORDERS
-CREATE TABLE purchase_orders (
+CREATE TABLE IF NOT EXISTS purchase_orders (
     id TEXT PRIMARY KEY,
     vendor_id TEXT REFERENCES vendors(id),
-    status VARCHAR(20) NOT NULL DEFAULT 'draft',  -- draft | approved | sent
+    status VARCHAR(20) NOT NULL DEFAULT 'draft',  -- draft | approved | sent | received
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE po_items (
+CREATE TABLE IF NOT EXISTS po_items (
     id TEXT PRIMARY KEY,
     po_id TEXT REFERENCES purchase_orders(id),
     inventory_item_id TEXT REFERENCES inventory_items(id),
@@ -110,28 +111,29 @@ CREATE TABLE po_items (
 );
 
 -- PAYMENTS (EMV, semi-integrated — blueprint §4)
-CREATE TABLE payments (
+CREATE TABLE IF NOT EXISTS payments (
     id TEXT PRIMARY KEY,
     order_id TEXT REFERENCES orders(id),
     amount NUMERIC NOT NULL,
     method VARCHAR(20) DEFAULT 'emv',          -- 'emv' | 'emv_offline'
     status VARCHAR(20) DEFAULT 'authorized',   -- authorized | captured | stored
-    card_token TEXT                            -- tokenized only; never raw PAN
+    card_token TEXT,                           -- tokenized only; never raw PAN
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- LABOR DOMAIN
-CREATE TABLE roles (
+CREATE TABLE IF NOT EXISTS roles (
     id TEXT PRIMARY KEY,
     name VARCHAR(50) NOT NULL,
     hourly_rate NUMERIC NOT NULL
 );
-CREATE TABLE employees (
+CREATE TABLE IF NOT EXISTS employees (
     id TEXT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     role_id TEXT REFERENCES roles(id),
     pin VARCHAR(10)
 );
-CREATE TABLE time_clock_entries (
+CREATE TABLE IF NOT EXISTS time_clock_entries (
     id TEXT PRIMARY KEY,
     employee_id TEXT REFERENCES employees(id),
     clock_in TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

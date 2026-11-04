@@ -12,6 +12,22 @@ from .db import new_uuid, money
 OFFLINE_RISK_LIMIT = 500.00
 
 
+def record_cash_payment(conn, order_id: str, amount: float, *, commit: bool = True) -> str:
+    """Record a cash tender; no card data or gateway interaction is involved."""
+    amount = money(amount)
+    if amount <= 0:
+        raise ValueError("payment amount must be positive")
+    payment_id = new_uuid()
+    conn.execute(
+        "INSERT INTO payments (id, order_id, amount, method, status)"
+        " VALUES (?, ?, ?, 'cash', 'captured')",
+        (payment_id, order_id, amount),
+    )
+    if commit:
+        conn.commit()
+    return payment_id
+
+
 def create_payment(conn, order_id: str, amount: float, method: str = "emv") -> str:
     pay_id = new_uuid()
     conn.execute(
