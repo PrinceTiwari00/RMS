@@ -109,6 +109,16 @@ CREATE TABLE po_items (
     unit_price NUMERIC NOT NULL
 );
 
+-- PAYMENTS (EMV, semi-integrated — blueprint §4)
+CREATE TABLE payments (
+    id TEXT PRIMARY KEY,
+    order_id TEXT REFERENCES orders(id),
+    amount NUMERIC NOT NULL,
+    method VARCHAR(20) DEFAULT 'emv',          -- 'emv' | 'emv_offline'
+    status VARCHAR(20) DEFAULT 'authorized',   -- authorized | captured | stored
+    card_token TEXT                            -- tokenized only; never raw PAN
+);
+
 -- LABOR DOMAIN
 CREATE TABLE roles (
     id TEXT PRIMARY KEY,
