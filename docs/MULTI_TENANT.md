@@ -94,6 +94,49 @@ the QR token.
 `RMS_TENANT_DIRECTORY=0` hides the restaurant list on the PIN pad (codes must be
 typed) for deployments that don't want to publish store names.
 
+## Plans
+
+A plan is a **capacity and module** contract, not a second permission system. The
+restaurant's role matrix still decides who may do what; the plan then caps what
+the restaurant is entitled to at all. Effective permissions are
+`role permissions ∩ plan permissions`, evaluated on every request.
+
+| Plan | Modules | Active staff |
+| --- | --- | --- |
+| `free` (Starter) | POS, floor, host, kitchen/expo/prep, QR + CFD, menu, users, settings, Z-report | 8 |
+| `standard` | Everything, including inventory, recipes, purchasing, waste, labour and reporting | 30 |
+| `pro` | Everything | Unlimited |
+
+- Seat caps are enforced in `createEmployee` and when reactivating an employee.
+  Deactivation is always allowed, so a downgrade never traps an administrator.
+- A plan change takes effect on the next request — no re-login and no cache to
+  bust, because permissions were already re-read per request.
+- The console shows `staff / limit` per restaurant and flags **At seat limit**.
+  The restaurant's own **Users & Permissions** screen shows the same usage and
+  disables *Add employee* at the cap.
+- Unknown/legacy plan ids fall back to Standard, so an old database never loses
+  access because of a missing enum value.
+
+Definitions live in `src/domain/plans.ts`; enforcement lives in
+`src/server/plan.ts` and is applied in `identity.loadUser()` and the staff
+service.
+
+## Sign-in throttling
+
+Both public credential endpoints are rate limited in process:
+
+| Endpoint | Key | Allowance | Block |
+| --- | --- | --- | --- |
+| `POST /api/session/signin` | client IP + restaurant | 5 failures / 10 min | 15 min |
+| `POST /api/platform/signin` | client IP + email | 5 failures / 10 min | 15 min |
+| `POST /api/platform/setup` | client IP | 3 rejected tokens / 30 min | 30 min |
+
+A blocked attempt returns **429** with a retry hint; a correct PIN is not accepted
+while the block is active. A successful sign-in clears the counter. Counters are
+in-memory, so a restart clears them — pair this with proxy-level limits if the
+instance is exposed to the public internet. The client address comes from
+`x-forwarded-for` / `x-real-ip`, so the reverse proxy must set it.
+
 ## Security boundaries
 
 - Platform and staff sessions are different cookies, different CSRF tokens and
@@ -107,7 +150,7 @@ typed) for deployments that don't want to publish store names.
 - A restaurant manager cannot escalate to platform: there is no permission string,
   no route and no UI that reaches `/api/platform/*`.
 - Platform passwords are scrypt-hashed; restaurant PINs are unchanged (scrypt,
-  demo-only plaintext hints).
+  demo-only plaintext hints). Both sign-in paths are throttled (see above).
 - Audit trails are split: each restaurant keeps its own `audit_log`; the control
   plane keeps `platform_audit` and `tenant_admin_resets`.
 
@@ -147,8 +190,9 @@ npm run tenant:create -- --name "Himalayan Grill" --admin "Sita Gurung" --pin 77
 
 ## Limits and next steps
 
-- A restaurant's "plan" is a label today; it does not yet gate features or seats.
-  Add per-plan permission caps in `permissionsFor()` when billing arrives.
+- Plans gate modules and seats, but there is no billing integration: invoices,
+  dunning and self-service upgrades are still manual in the console.
+- Throttle counters are per process and reset on restart (see above).
 - Provisioning runs inside the request. It is fast for a blank store (a few
   hundred ms) but grows with sample data; move it to a background job if bulk
   onboarding is needed.

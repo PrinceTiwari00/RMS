@@ -15,6 +15,7 @@ import { isDemoMode } from "@/lib/session";
 import { nowStamp } from "@/domain/time";
 import type { AuditEntry, RoleInfo, SessionUser, StaffMember } from "@/types";
 import { getSettings } from "@/server/settings";
+import { applyPlan, assertSeatAvailable } from "@/server/plan";
 
 interface EmployeeRow {
   id: string;
@@ -101,7 +102,7 @@ export function getStaff(filter: { includeInactive?: boolean; role?: string } = 
         isActive: Boolean(row.is_active),
         hourlyRate: Number(row.hourly_rate ?? 0),
         hireDate: row.hire_date,
-        permissions: permissionsFor(roleName, granted),
+        permissions: applyPlan(permissionsFor(roleName, granted)),
         clockedIn: Boolean(row.open_entry),
         currentEntryId: row.open_entry,
         // Only ever exposed in demo mode, purely as an on-screen hint.
@@ -131,7 +132,7 @@ export function toSessionUser(row: EmployeeRow): SessionUser {
     color: row.color,
     role: roleName,
     roleTitle: row.role_title ?? roleName,
-    permissions: permissionsFor(roleName, granted),
+    permissions: applyPlan(permissionsFor(roleName, granted)),
   };
 }
 
@@ -181,6 +182,9 @@ export function createEmployee(input: EmployeeInput, actor: SessionUser | null):
   validatePin(pin, getSettings().pinLength);
   if (findEmployeeByPin(pin)) throw badRequest("That PIN is already assigned to another employee");
   if (input.roleId && !get("SELECT id FROM roles WHERE id = ?", input.roleId)) throw notFound("Role not found");
+  // Seat caps come from the restaurant's plan. Reactivating an inactive
+  // employee below also checks this.
+  if (input.isActive !== false) assertSeatAvailable();
 
   const id = uuid();
   const initials = name
@@ -209,6 +213,7 @@ export function createEmployee(input: EmployeeInput, actor: SessionUser | null):
 export function updateEmployee(id: string, patch: EmployeeInput, actor: SessionUser | null): StaffMember {
   const row = get<EmployeeRow>("SELECT * FROM employees WHERE id = ?", id);
   if (!row) throw notFound("Employee not found");
+  if (patch.isActive === true && !row.is_active) assertSeatAvailable();
   if (patch.pin !== undefined && patch.pin !== "") {
     validatePin(patch.pin, getSettings().pinLength);
     const clash = all<EmployeeRow>("SELECT * FROM employees WHERE is_active = 1").find(

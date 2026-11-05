@@ -21,3 +21,4 @@ export const unauthorized = (message = "Sign in to continue") => new ApiError(40
 export const forbidden = (message = "You do not have permission to do that") => new ApiError(403, message);
 export const notFound = (message = "Not found") => new ApiError(404, message);
 export const conflict = (message: string) => new ApiError(409, message);
+export const tooManyRequests = (message: string) => new ApiError(429, message);

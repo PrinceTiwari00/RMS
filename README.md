@@ -110,6 +110,13 @@ Production first-run is one of:
 Suspending a restaurant blocks its staff sign-in and API calls immediately without
 touching its data. `RMS_TENANT_DIRECTORY=0` hides restaurant names on the PIN pad.
 
+Each restaurant carries a plan (`free` / `standard` / `pro`) that caps modules and
+active staff. Effective permissions are the role matrix intersected with the
+plan, re-evaluated per request, and seat limits block adding or reactivating
+staff. Both the platform console and `/admin/users` show seat usage. Sign-in on
+the PIN pad and the platform console is rate limited (five failures → 15 minute
+block). See **[docs/MULTI_TENANT.md](docs/MULTI_TENANT.md)**.
+
 ## Single-instance AWS deployment
 
 The repository includes a non-root production Dockerfile, single-container
@@ -148,7 +155,8 @@ RMS_ENV=demo npm run start   # explicit local demo mode
 The test suite covers domain arithmetic, state machines, permissions, seed
 integrity, signed sessions, the mandatory CSRF-header regression, and
 multi-restaurant isolation (provisioning, physical data separation, suspension,
-PIN reset and platform-staff token scoping). The production build compiles every
+PIN reset and platform-staff token scoping), plan entitlements and sign-in
+throttling. The production build compiles every
 App Router page and API route.
 
 ## Security and deployment boundary
@@ -157,7 +165,10 @@ App Router page and API route.
 - Authenticated mutations require the readable CSRF cookie **and** an explicit
   matching `x-csrf-token` header. The server never substitutes the Cookie header
   for that proof.
-- Permissions are re-read from the database on every request.
+- Permissions are re-read from the database on every request, then capped by the
+  restaurant's plan.
+- PIN and password sign-in are rate limited per client + restaurant/email; a
+  success clears the counter.
 - Set `RMS_ENV=production` and a stable, random `RMS_SECRET_KEY` of at least 32
   characters outside Git. Production cookies are Secure and SameSite=Lax.
 - SQLite is instance-local. `control.db` and the per-restaurant databases must be

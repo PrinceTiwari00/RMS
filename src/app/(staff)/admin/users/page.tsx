@@ -26,6 +26,10 @@ interface RolesResponse {
   catalogue: CatalogueGroup[];
 }
 
+interface PlanResponse {
+  plan: { plan: { id: string; name: string; summary: string }; activeStaff: number; staffLimit: number | null } | null;
+}
+
 export default function UsersPage() {
   const { allowed, loading: storeLoading, state } = useStore();
   const [tab, setTab] = useState<"team" | "roles" | "activity">("team");
@@ -33,6 +37,7 @@ export default function UsersPage() {
   const [roles, setRoles] = useState<RoleInfo[]>([]);
   const [catalogue, setCatalogue] = useState<CatalogueGroup[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [plan, setPlan] = useState<PlanResponse["plan"]>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -42,15 +47,17 @@ export default function UsersPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [staffResult, roleResult, auditResult] = await Promise.all([
+      const [staffResult, roleResult, auditResult, planResult] = await Promise.all([
         api.get<{ staff: StaffMember[]; roles: RoleInfo[] }>("staff?includeInactive=1"),
         api.get<RolesResponse>("roles"),
         api.get<{ entries: AuditEntry[] }>("audit?limit=40"),
+        api.get<PlanResponse>("plan").catch(() => ({ plan: null })),
       ]);
       setStaff(staffResult.staff);
       setRoles(roleResult.roles);
       setCatalogue(roleResult.catalogue);
       setAudit(auditResult.entries);
+      setPlan(planResult.plan);
       setError(null);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -68,6 +75,7 @@ export default function UsersPage() {
   }, [canManage, refresh]);
 
   const active = useMemo(() => staff.filter((member) => member.isActive), [staff]);
+  const atSeatLimit = Boolean(plan && plan.staffLimit !== null && plan.activeStaff >= plan.staffLimit);
 
   if (storeLoading) {
     return (
@@ -102,6 +110,15 @@ export default function UsersPage() {
             never shown again
             {state?.tenant ? ` · ${state.tenant.name}` : ""}
           </p>
+          {plan && (
+            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-faint">
+              <Chip tone="neutral">{plan.plan.name} plan</Chip>
+              <span className="tnum font-semibold text-ink-soft">
+                {plan.activeStaff}
+                {plan.staffLimit === null ? " active staff · unlimited seats" : `/${plan.staffLimit} seats used`}
+              </span>
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           {(
@@ -123,7 +140,13 @@ export default function UsersPage() {
             </button>
           ))}
           {tab === "team" && (
-            <Button variant="primary" size="sm" onClick={() => setAdding((current) => !current)}>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={atSeatLimit}
+              title={atSeatLimit ? "The plan's seat limit is reached. Deactivate someone or upgrade the plan." : undefined}
+              onClick={() => setAdding((current) => !current)}
+            >
               <Icon name="plus" className="size-4" /> Add employee
             </Button>
           )}
@@ -133,6 +156,13 @@ export default function UsersPage() {
       {error && (
         <p role="alert" className="mb-3 rounded-xl bg-late-soft px-3 py-2.5 text-[12px] font-semibold text-late">
           {error}
+        </p>
+      )}
+
+      {atSeatLimit && (
+        <p className="mb-3 rounded-xl border border-warn/25 bg-warn-soft px-3 py-2.5 text-[12px] font-semibold text-warn">
+          This restaurant has reached the {plan?.plan.name} plan&apos;s seat limit of {plan?.staffLimit} active staff.
+          Deactivate someone you no longer schedule, or ask your platform administrator to change the plan.
         </p>
       )}
 

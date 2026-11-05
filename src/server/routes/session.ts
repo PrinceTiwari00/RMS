@@ -29,6 +29,9 @@ import {
   type Tenant,
 } from "@/server/tenant";
 import { platformSetupRequired } from "@/server/platform";
+import { planUsage } from "@/server/plan";
+import { PLAN_DEFINITIONS } from "@/domain/plans";
+import { SIGNIN_POLICY, assertNotBlocked, clearAuthFailures, recordAuthFailure } from "@/server/rate-limit";
 
 const COOKIE_BASE = {
   httpOnly: true,
@@ -44,7 +47,7 @@ const COOKIE_BASE = {
  * pad's restaurant picker) or implicitly because this deployment serves exactly
  * one active restaurant.
  */
-publicRoute("POST", "session/signin", ({ body }) => {
+publicRoute("POST", "session/signin", ({ body, ip }) => {
   const pin = required(body, "pin", "PIN");
   // Deliberately not `required`: a single-restaurant deployment needs no code.
   const code = String(body.restaurant ?? body.tenantCode ?? "").trim();
@@ -60,8 +63,19 @@ publicRoute("POST", "session/signin", ({ body }) => {
     throw badRequest(`${tenant.name} is suspended. Contact your platform administrator.`);
   }
 
+  // Throttle per client + restaurant: five wrong PINs start a 15 minute block.
+  const attemptKey = `staff:${tenant.id}:${ip}`;
+  assertNotBlocked(attemptKey, SIGNIN_POLICY);
+
   const clockIn = bool(body, "clockIn", false);
-  const { user } = runWithTenant(tenant, () => signInWithPin(pin, clockIn));
+  let user;
+  try {
+    ({ user } = runWithTenant(tenant, () => signInWithPin(pin, clockIn)));
+  } catch (error) {
+    recordAuthFailure(attemptKey, SIGNIN_POLICY);
+    throw error;
+  }
+  clearAuthFailures(attemptKey);
 
   const token = issueToken(user.id, { tenantId: tenant.id });
   const csrf = newCsrfToken();
@@ -133,6 +147,12 @@ route("GET", "bootstrap", null, ({ anonymous, query }) => buildBootstrap(anonymo
 route("GET", "metrics", null, () => buildMetrics());
 
 route("GET", "state/staff", "pos.open", () => ({ staff: getStaff() }));
+
+/** Plan capacity for the current restaurant (seats, module caps). */
+route("GET", "plan", null, () => ({
+  plan: planUsage(),
+  catalogue: PLAN_DEFINITIONS,
+}));
 
 // --------------------------------------------------------------------- settings
 route("GET", "settings", "admin.settings", () => ({

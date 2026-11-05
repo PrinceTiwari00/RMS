@@ -43,6 +43,13 @@ interface RouteContext {
   params: Promise<{ path?: string[] }>;
 }
 
+/** Proxy-aware client address for sign-in throttling. */
+function clientIp(request: NextRequest): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
+  return request.headers.get("x-real-ip")?.trim() || "unknown";
+}
+
 function parseBody(text: string): Record<string, unknown> {
   if (!text.trim()) return {};
   const parsed = JSON.parse(text) as unknown;
@@ -70,6 +77,7 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
   const segments = (resolved?.path ?? []).filter(Boolean).map(decodeURIComponent);
   const method = request.method.toUpperCase();
   const jar: CookieJar = { get: (name) => request.cookies.get(name) };
+  const ip = clientIp(request);
 
   try {
     ensureDatabase();
@@ -115,6 +123,7 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
         query: request.nextUrl.searchParams,
         body,
         admin,
+        ip,
       });
     } catch (error) {
       return errorResponse(error);
@@ -149,7 +158,7 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
     }
     let result: DispatchResult;
     try {
-      result = await dispatch({ method, segments, query: request.nextUrl.searchParams, body, user });
+      result = await dispatch({ method, segments, query: request.nextUrl.searchParams, body, user, ip });
     } catch (error) {
       return errorResponse(error);
     }
@@ -198,7 +207,7 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
   let result: DispatchResult;
   try {
     result = await withTenant(tenantScope(tenant), () =>
-      dispatch({ method, segments, query: request.nextUrl.searchParams, body, user }),
+      dispatch({ method, segments, query: request.nextUrl.searchParams, body, user, ip }),
     );
   } catch (error) {
     return errorResponse(error);

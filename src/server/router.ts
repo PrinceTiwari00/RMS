@@ -7,11 +7,19 @@
  */
 import { NextResponse } from "next/server";
 import { can, type Permission } from "@/domain/permissions";
-import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from "@/server/errors";
+import {
+  ApiError,
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+  tooManyRequests,
+  unauthorized,
+} from "@/server/errors";
 import type { PlatformUser } from "@/server/platform";
 import type { SessionUser } from "./identity";
 
-export { ApiError, badRequest, conflict, forbidden, notFound, unauthorized };
+export { ApiError, badRequest, conflict, forbidden, notFound, tooManyRequests, unauthorized };
 
 export interface RouteContext {
   params: Record<string, string>;
@@ -20,6 +28,8 @@ export interface RouteContext {
   user: SessionUser;
   /** Null when the endpoint is public (guest QR ordering, customer display). */
   anonymous: SessionUser | null;
+  /** Best-effort client address, used for sign-in throttling. */
+  ip: string;
 }
 
 export type Handler = (context: RouteContext) => unknown | Promise<unknown>;
@@ -80,6 +90,8 @@ export interface DispatchInput {
   query: URLSearchParams;
   body: Record<string, unknown>;
   user: SessionUser | null;
+  /** Best-effort client address (proxy-aware headers); throttling uses it. */
+  ip?: string;
 }
 
 export type DispatchResult =
@@ -120,6 +132,7 @@ export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
         body: input.body,
         user: input.user ?? anonymousUser(),
         anonymous: input.user,
+        ip: input.ip ?? "unknown",
       });
       if (result instanceof NextResponse) return { kind: "handled", response: result };
       return { kind: "handled", response: NextResponse.json(result ?? { ok: true }, { status: 200 }) };
@@ -168,6 +181,8 @@ export interface PlatformRouteContext {
   body: Record<string, unknown>;
   /** Null only on the public platform endpoints (status, setup, sign-in). */
   admin: PlatformUser | null;
+  /** Best-effort client address, used for password/setup throttling. */
+  ip: string;
 }
 
 export type PlatformHandler = (context: PlatformRouteContext) => unknown | Promise<unknown>;
@@ -201,6 +216,7 @@ export interface PlatformDispatchInput {
   query: URLSearchParams;
   body: Record<string, unknown>;
   admin: PlatformUser | null;
+  ip?: string;
 }
 
 export async function dispatchPlatform(input: PlatformDispatchInput): Promise<DispatchResult> {
@@ -221,6 +237,7 @@ export async function dispatchPlatform(input: PlatformDispatchInput): Promise<Di
         query: input.query,
         body: input.body,
         admin: input.admin,
+        ip: input.ip ?? "unknown",
       });
       if (result instanceof NextResponse) return { kind: "handled", response: result };
       return { kind: "handled", response: NextResponse.json(result ?? { ok: true }, { status: 200 }) };

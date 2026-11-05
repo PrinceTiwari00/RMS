@@ -33,6 +33,7 @@ import { seedIfEmpty } from "@/db/seed";
 import { nowStamp } from "@/domain/time";
 import { isDemoMode } from "@/lib/session-core";
 import { hashPin, pinMatches } from "@/lib/pin";
+import { planFor, planStaffLimit } from "@/domain/plans";
 import { badRequest, conflict, forbidden, notFound } from "@/server/errors";
 import { audit } from "@/server/audit";
 import { platformAudit } from "@/server/platform";
@@ -70,6 +71,9 @@ export interface TenantPublic {
   tagline: string;
   status: TenantStatus;
   plan: TenantPlan;
+  /** Display name and seat cap of the plan (null cap = unlimited). */
+  planName: string;
+  staffLimit: number | null;
   contactName: string;
   contactEmail: string;
   contactPhone: string;
@@ -697,6 +701,8 @@ export function publicTenant(tenant: Tenant): TenantPublic {
     tagline: tenant.tagline,
     status: tenant.status,
     plan: tenant.plan,
+    planName: planFor(tenant.plan).name,
+    staffLimit: planStaffLimit(tenant.plan),
     contactName: tenant.contactName,
     contactEmail: tenant.contactEmail,
     contactPhone: tenant.contactPhone,

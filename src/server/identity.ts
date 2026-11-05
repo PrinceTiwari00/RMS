@@ -6,6 +6,7 @@
 import { all, get } from "@/db/client";
 import { permissionsFor, type Permission } from "@/domain/permissions";
 import { readSession, type CookieJar } from "@/lib/session";
+import { applyPlan } from "@/server/plan";
 
 export interface SessionUser {
   id: string;
@@ -51,7 +52,9 @@ export function loadUser(employeeId: string): SessionUser | null {
     color: row.color,
     role: roleName,
     roleTitle: row.role_title ?? roleName,
-    permissions: permissionsFor(roleName, permissions),
+    // Plan caps are applied last: the role matrix says what this employee may
+    // do, and the restaurant's plan says which modules the restaurant has.
+    permissions: applyPlan(permissionsFor(roleName, permissions)),
   };
 }
 

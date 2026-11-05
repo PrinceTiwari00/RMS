@@ -34,6 +34,13 @@ import {
 import { optBool, optStr, qInt, required } from "@/server/coerce";
 import { badRequest, notFound } from "@/server/errors";
 import {
+  SIGNIN_POLICY,
+  SETUP_POLICY,
+  assertNotBlocked,
+  clearAuthFailures,
+  recordAuthFailure,
+} from "@/server/rate-limit";
+import {
   PLATFORM_CSRF_COOKIE,
   PLATFORM_SESSION_COOKIE,
   isProduction,
@@ -106,14 +113,25 @@ platformRoute(
 platformRoute(
   "POST",
   "setup",
-  ({ body }) => {
-    const user = createPlatformUser({
-      name: required(body, "name", "Your name"),
-      email: required(body, "email", "Email"),
-      password: required(body, "password", "Password"),
-      setupToken: optStr(body, "setupToken"),
-      firstAccount: true,
-    });
+  ({ body, ip }) => {
+    const attemptKey = `platform-setup:${ip}`;
+    assertNotBlocked(attemptKey, SETUP_POLICY);
+    let user;
+    try {
+      user = createPlatformUser({
+        name: required(body, "name", "Your name"),
+        email: required(body, "email", "Email"),
+        password: required(body, "password", "Password"),
+        setupToken: optStr(body, "setupToken"),
+        firstAccount: true,
+      });
+    } catch (error) {
+      // Only a rejected token should consume the allowance; a validation error
+      // on the form is not a guess at the deployment secret.
+      if (error instanceof Error && /setup token/i.test(error.message)) recordAuthFailure(attemptKey, SETUP_POLICY);
+      throw error;
+    }
+    clearAuthFailures(attemptKey);
     return issuePlatformSession(user);
   },
   { requiresAuth: false },
@@ -122,8 +140,19 @@ platformRoute(
 platformRoute(
   "POST",
   "signin",
-  ({ body }) => {
-    const { user } = signInPlatform(required(body, "email", "Email"), required(body, "password", "Password"));
+  ({ body, ip }) => {
+    const email = required(body, "email", "Email");
+    const password = required(body, "password", "Password");
+    const attemptKey = `platform:${ip}:${email.trim().toLowerCase()}`;
+    assertNotBlocked(attemptKey, SIGNIN_POLICY);
+    let user;
+    try {
+      ({ user } = signInPlatform(email, password));
+    } catch (error) {
+      recordAuthFailure(attemptKey, SIGNIN_POLICY);
+      throw error;
+    }
+    clearAuthFailures(attemptKey);
     return issuePlatformSession(user);
   },
   { requiresAuth: false },

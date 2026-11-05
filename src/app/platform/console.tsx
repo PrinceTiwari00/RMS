@@ -44,6 +44,8 @@ export interface TenantRow {
   tagline: string;
   status: "active" | "suspended";
   plan: "free" | "standard" | "pro";
+  planName: string;
+  staffLimit: number | null;
   contactName: string;
   contactEmail: string;
   contactPhone: string;
@@ -415,7 +417,10 @@ function RestaurantCard({
             <Chip tone={suspended ? "late" : "ok"} dot>
               {suspended ? "Suspended" : "Active"}
             </Chip>
-            <Chip tone="neutral">{tenant.plan}</Chip>
+            <Chip tone="neutral">{tenant.planName}</Chip>
+            {tenant.staffLimit !== null && tenant.stats.staff >= tenant.staffLimit && (
+              <Chip tone="warn">At seat limit</Chip>
+            )}
             {!tenant.stats.healthy && <Chip tone="warn">Database unreadable</Chip>}
           </div>
           <p className="mt-0.5 truncate text-[11px] text-ink-faint">
@@ -460,7 +465,10 @@ function RestaurantCard({
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-2 border-t border-rule pt-3 sm:grid-cols-6">
-        <Metric label="Staff" value={String(tenant.stats.staff)} />
+        <Metric
+          label="Staff"
+          value={tenant.staffLimit === null ? String(tenant.stats.staff) : `${tenant.stats.staff}/${tenant.staffLimit}`}
+        />
         <Metric label="Managers" value={String(tenant.stats.managers)} />
         <Metric label="Menu items" value={String(tenant.stats.menuItems)} />
         <Metric label="Tables" value={String(tenant.stats.tables)} />
