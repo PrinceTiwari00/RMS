@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dispatch, errorResponse, type DispatchResult } from "@/server/router";
 import { userFromJar } from "@/server/identity";
-import { csrfMatches, readCsrfCookie } from "@/lib/session";
+import { csrfHeaderMatches } from "@/lib/session";
 import { ensureDatabase } from "@/db/boot";
 import "@/server/routes";
 
@@ -46,8 +46,9 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
   const isPublicPath = publicPrefixes.includes(segments[0] ?? "");
 
   if (user && MUTATING.has(method) && !isPublicPath) {
-    const supplied = request.headers.get("x-csrf-token") ?? readCsrfCookie(request.headers.get("cookie"));
-    if (!csrfMatches(jar, supplied)) {
+    // The header is mandatory. Reading the token back out of the Cookie header
+    // would make a cross-site request satisfy its own double-submit check.
+    if (!csrfHeaderMatches(jar, request.headers)) {
       return NextResponse.json({ error: "Your session expired — reload the page and sign in again" }, { status: 403 });
     }
   }

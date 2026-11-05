@@ -1,76 +1,89 @@
 # RMS — Restaurant Management System
 
-RMS combines the restaurant domain modules with a browser-based operations MVP.
-The web app uses the existing SQLite-backed domain logic for table service,
-kitchen tickets, inventory movements, and cash checkout.
+RMS is a single-store restaurant operations MVP built with Next.js, React and
+SQLite. It combines front-of-house service, kitchen displays, back-office
+reporting, and customer self-service in one Node.js application.
 
-## Product workflow
-
-1. Open an available table and start a ticket.
-2. Add menu items and optional modifiers; the prices are snapshotted on the line.
-3. Send the ticket to the kitchen. Appetizers and drinks start immediately;
-   entrees remain on HOLD until fired.
-4. Mark each kitchen item READY, then complete a cash checkout.
-5. The sale closes atomically with recipe stock deductions and ledger entries;
-   the table becomes dirty until reset.
-6. Review stock and record received quantities or waste adjustments.
-
-The first run seeds a small sample menu, floor plan, recipes, inventory, and
-vendor. The UI is responsive and uses local assets only.
+All money is stored as integer paisa. Menu prices and modifier prices are
+snapshotted onto each order line, and the same domain pricing engine is used by
+the POS, guest cart, checkout, and reports.
 
 ## Run locally
 
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt pytest
-RMS_ENV=demo python3 app.py
-```
-
-Open `http://localhost:8000`. The demo database is `rms.db` in the repository
-and is ignored by Git. Delete that file to reset demo data. Tests:
+Requirements: **Node.js 22.5 or newer** (the app uses the built-in `node:sqlite`
+driver) and npm.
 
 ```bash
-python -m pytest -q
+npm ci
+npm run db:seed
+npm run dev
 ```
 
-## Deployment and safety boundary
+Open `http://localhost:3000`. The database is created at `data/rms.db` and is
+ignored by Git. Seeding is idempotent; to erase and rebuild the demo restaurant:
 
-The `Procfile` starts Gunicorn in **production mode**, which fails closed unless
-both `RMS_ADMIN_PASSWORD` (at least 16 characters) and `RMS_SECRET_KEY` (at
-least 32 characters, stable across restarts) are configured. Set those only in
-your deployment platform's secret/environment settings, never in Git. Production
-API requests require the administrator session and CSRF token; session cookies
-are HTTP-only, SameSite=Lax, and Secure.
+```bash
+npm run db:reset
+```
 
-This is a usable single-store MVP, not yet a production POS deployment:
+The seeded manager is **Rajesh Kumar Sah**, with demo PIN **2468**. Other staff
+PINs are shown on the PIN pad in demo mode. Never use demo credentials or the
+built-in development secret for a real deployment.
 
-- Production login is a single shared administrator password; there are no
-  staff roles, individual audit identities, or login rate limiting.
-- The app uses an instance-local SQLite file. A hosted instance can be replaced
-  or scaled, so use a durable/shared database adapter and tested backups before
-  recording real restaurant transactions in the cloud.
-- Checkout is cash-only. No card numbers or card tokens are collected by this
-  UI; tax, tips, refunds, discounts, and split payments are not implemented.
-- The browser app requires connectivity to its server. The `rms.sync` module
-  models a local sync queue, but full browser-side offline POS operation is not
-  wired into this interface.
-- AWS infrastructure was not created. Confirm the project's selected Region
-  before provisioning any regional resources.
+## Main workspaces
 
-## Domain modules
+- `/pos` — tickets, menu modifiers, send/fire, and checkout
+- `/floor` and `/host` — live floor plan, waitlist, and reservations
+- `/kds/grill`, `/expo`, and `/prep` — station boards, the pass, and prep sheets
+- `/admin/*` — menu, inventory, recipes, purchasing, waste, floor-plan editing,
+  product mix, executive reporting, and Z-reports
+- `/cfd` — read-only customer-facing display with a live ticket and payment QR;
+  use `/cfd?terminal=term-pos-2` for the second register
+- `/t/[token]` — public QR table ordering, live kitchen status, and guest
+  checkout. A seeded example is `/t/t01-m1`.
 
-| Module | Capability |
-|---|---|
-| `rms/menu.py` | Menu items and modifiers |
-| `rms/orders.py` | Order lifecycle and price-at-time snapshots |
-| `rms/sync.py` | Offline sync queue and FIFO flush |
-| `rms/tables.py` | Floor-plan state machine |
-| `rms/kds.py` | Kitchen routing, entree HOLD, item READY, expo state |
-| `rms/inventory.py` | Recipe deduction and inventory transaction ledger |
-| `rms/purchasing.py` | Reorder calculations and approve → send → receive PO workflow |
-| `rms/payments.py` | EMV/store-and-forward domain helpers plus cash checkout record |
-| `rms/printing.py` | ESC/POS ticket buffer and backup-printer routing |
-| `rms/queues.py` | Retryable job queue and dead-letter handling |
-| `rms/labor.py` | Clock-in/out and labor cost calculations |
-| `rms/edi.py` | ANSI X12 EDI 850 generation |
+The guest token grants access only to its assigned table's active QR ticket.
+The CFD and QR pages use relative API URLs, so they work behind a reverse proxy
+without hardcoding a browser-facing backend origin.
+
+## Verify
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm run start
+```
+
+The test suite covers domain arithmetic, state machines, permissions, seed
+integrity, signed sessions, and the mandatory CSRF-header regression. The
+production build compiles every App Router page and API route.
+
+## Security and deployment boundary
+
+- Staff authentication uses an HMAC-signed, HTTP-only session cookie.
+- Authenticated mutations require the readable CSRF cookie **and** an explicit
+  matching `x-csrf-token` header. The server never substitutes the Cookie header
+  for that proof.
+- Permissions are re-read from the database on every request.
+- Set `RMS_ENV=production` and a stable, random `RMS_SECRET_KEY` of at least 32
+  characters outside Git. Production cookies are Secure and SameSite=Lax.
+- SQLite is instance-local. Use durable storage, tested backups, and a suitable
+  database strategy before recording real transactions in a hosted environment.
+- Guest card/wallet checkout records a tender; it does **not** integrate with or
+  independently verify a payment gateway. Demo mode labels this explicitly.
+  Do not treat it as real payment settlement.
+- This remains an MVP, not a certified fiscal POS or a multi-tenant/cloud sync
+  deployment.
+
+## Project layout
+
+| Path | Responsibility |
+| --- | --- |
+| `src/domain` | Framework-free money, pricing, KDS, table, inventory, labour, and checkout rules |
+| `src/db` | SQLite schema, connection, migrations, and demo seed |
+| `src/server` | Authenticated services and the pattern-based API route registry |
+| `src/app/api/[...path]` | Single HTTP entrypoint for authentication, CSRF, validation, and dispatch |
+| `src/app` | Staff, kitchen, customer-display, login, and QR guest screens |
+| `src/components` | Shared POS/guest controls and local SVG/chart primitives |
+| `tests` | Vitest domain, seed-integrity, and session-security tests |

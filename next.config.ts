@@ -6,10 +6,9 @@ const nextConfig: NextConfig = {
   // Dev-server cross-origin checks must accept that host as well as localhost.
   allowedDevOrigins: ["*.e2b.app", "localhost", "127.0.0.1"],
   eslint: { ignoreDuringBuilds: true },
-  experimental: {
-    // node:sqlite is loaded only from server code; keep it out of the client bundle.
-    serverComponentsExternalPackages: [],
-  },
+  // node:sqlite is loaded only from server code; keep native/server packages
+  // out of browser bundles using Next 15's top-level configuration key.
+  serverExternalPackages: [],
 };
 
 export default nextConfig;

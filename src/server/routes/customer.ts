@@ -26,6 +26,7 @@ import { arr, bool, num, oneOf, q, qBool, required, str } from "@/server/coerce"
 import { requireOrder } from "@/server/orders";
 import { priceOrder, tipSuggestions } from "@/domain/pricing";
 import { cashSuggestions, TENDER_METHODS } from "@/domain/checkout";
+import { isDemoMode } from "@/lib/session";
 
 const GUEST_TENDERS = ["wallet", "esewa", "khalti", "card"] as const;
 
@@ -44,6 +45,7 @@ publicRoute("GET", "guest/:token", async ({ params, query }) => {
     },
     tenders: TENDER_METHODS.filter((tender) => (GUEST_TENDERS as readonly string[]).includes(tender.id)),
     tipPresets: settings.tipPresets,
+    demoMode: isDemoMode(),
     referrer: q(query, "ref"),
   };
 });

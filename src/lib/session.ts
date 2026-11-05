@@ -84,12 +84,11 @@ export function csrfMatches(jar: CookieJar, supplied: string | null): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Read the CSRF cookie without needing the async Next cookies() API. */
-export function readCsrfCookie(headerValue: string | null): string | null {
-  if (!headerValue) return null;
-  const match = headerValue
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${CSRF_COOKIE}=`));
-  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : null;
+/**
+ * Validate the double-submit header without ever falling back to Cookie.
+ * A browser attaches cookies to cross-site requests automatically, so parsing
+ * the token out of that same header would provide no CSRF protection at all.
+ */
+export function csrfHeaderMatches(jar: CookieJar, headers: Pick<Headers, "get">): boolean {
+  return csrfMatches(jar, headers.get("x-csrf-token"));
 }
