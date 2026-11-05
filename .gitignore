@@ -1,7 +1,33 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# tests / tooling
+coverage/
+.pytest_cache/
 __pycache__/
 *.pyc
-.pytest_cache/
+
+# local database + runtime data (never commit restaurant data)
+data/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+
+# env + secrets
+.env
+.env*.local
+
+# misc
+.DS_Store
 .venv/
+
+# local scratch scripts (not part of the app)
+scratch/
