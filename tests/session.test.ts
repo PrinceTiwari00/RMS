@@ -25,6 +25,31 @@ describe("staff session security", () => {
     expect(csrfMatches({ get: () => undefined }, csrf)).toBe(false);
   });
 
+  it("fails closed for missing, short, or development production secrets", () => {
+    const previousEnvironment = process.env.RMS_ENV;
+    const previousSecret = process.env.RMS_SECRET_KEY;
+    const previousNodeEnvironment = process.env.NODE_ENV;
+    try {
+      delete process.env.RMS_ENV;
+      Reflect.set(process.env, "NODE_ENV", "production");
+      delete process.env.RMS_SECRET_KEY;
+      expect(() => issueToken("emp-manager")).toThrow(/RMS_SECRET_KEY/);
+      process.env.RMS_SECRET_KEY = "too-short";
+      expect(() => issueToken("emp-manager")).toThrow(/RMS_SECRET_KEY/);
+      process.env.RMS_SECRET_KEY = "rms-development-secret-change-me-0123456789abcdef";
+      expect(() => issueToken("emp-manager")).toThrow(/RMS_SECRET_KEY/);
+      process.env.RMS_SECRET_KEY = "a-real-test-only-production-secret-0123456789";
+      expect(verifyToken(issueToken("emp-manager"))?.uid).toBe("emp-manager");
+    } finally {
+      if (previousEnvironment === undefined) delete process.env.RMS_ENV;
+      else process.env.RMS_ENV = previousEnvironment;
+      if (previousSecret === undefined) delete process.env.RMS_SECRET_KEY;
+      else process.env.RMS_SECRET_KEY = previousSecret;
+      if (previousNodeEnvironment === undefined) Reflect.deleteProperty(process.env, "NODE_ENV");
+      else Reflect.set(process.env, "NODE_ENV", previousNodeEnvironment);
+    }
+  });
+
   it("requires an explicit CSRF header even when the browser sent the cookie", () => {
     const csrf = newCsrfToken();
     const jar = { get: (name: string) => (name === CSRF_COOKIE ? { value: csrf } : undefined) };

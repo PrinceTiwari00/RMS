@@ -31,8 +31,13 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
     ensureDatabase();
   } catch (error) {
     console.error("[rms] database unavailable", error);
+    const configurationError = error instanceof Error && error.message.startsWith("RMS_SECRET_KEY");
     return NextResponse.json(
-      { error: "The database could not be opened. Run `npm run db:reset` to rebuild the demo data." },
+      {
+        error: configurationError
+          ? (error as Error).message
+          : "The database could not be opened. Check RMS_DB_PATH, filesystem permissions and available disk space.",
+      },
       { status: 500 },
     );
   }
@@ -42,7 +47,7 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
   const method = request.method.toUpperCase();
 
   // Public endpoints (guest QR ordering, the customer display) carry no session.
-  const publicPrefixes = ["guest", "cfd", "session"];
+  const publicPrefixes = ["guest", "cfd", "session", "setup"];
   const isPublicPath = publicPrefixes.includes(segments[0] ?? "");
 
   if (user && MUTATING.has(method) && !isPublicPath) {

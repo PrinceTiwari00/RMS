@@ -29,6 +29,7 @@ import { cashSuggestions, TENDER_METHODS, type SplitMode } from "@/domain/checko
 import { getSettings } from "@/server/settings";
 import { tipSuggestions } from "@/domain/pricing";
 import { roundToRupee } from "@/domain/money";
+import { authorizeSensitiveAction } from "@/server/approvals";
 
 // --------------------------------------------------------------------- listing
 route("GET", "orders", null, ({ query }) => ({
@@ -104,9 +105,10 @@ route("PATCH", "orders/:id/lines/:lineId", "pos.open", ({ params, body }) =>
 );
 
 /** Removing a line that has already been sent is a void, and is audited. */
-route("DELETE", "orders/:id/lines/:lineId", "pos.void", ({ params, body, query, user }) =>
-  removeLine(params.id, params.lineId, q(query, "reason") || str(body, "reason", "Removed by server"), user),
-);
+route("DELETE", "orders/:id/lines/:lineId", "pos.open", ({ params, body, query, user }) => {
+  const approver = authorizeSensitiveAction(user, "void", optStr(body, "managerPin"));
+  return removeLine(params.id, params.lineId, q(query, "reason") || str(body, "reason", "Removed by server"), user, approver);
+});
 
 route("POST", "orders/:id/send", "pos.send", ({ params, user }) => sendToKitchen(params.id, user));
 
@@ -126,9 +128,10 @@ route("POST", "orders/:id/transfer", "pos.open", ({ params, body, user }) =>
 );
 
 // -------------------------------------------------------------------- discount
-route("POST", "orders/:id/discount", "pos.discount", ({ params, body, user }) => {
+route("POST", "orders/:id/discount", "pos.open", ({ params, body, user }) => {
   const kind = str(body, "kind", "amount");
   if (kind !== "amount" && kind !== "percent") throw badRequest("Discount kind must be 'amount' or 'percent'");
+  const approver = authorizeSensitiveAction(user, "discount", optStr(body, "managerPin"));
   return applyDiscount(
     params.id,
     {
@@ -138,12 +141,14 @@ route("POST", "orders/:id/discount", "pos.discount", ({ params, body, user }) =>
       lineId: nullableStr(body, "lineId"),
     },
     user,
+    approver,
   );
 });
 
-route("DELETE", "orders/:id/discount/:discountId", "pos.discount", ({ params, user }) =>
-  removeDiscount(params.id, params.discountId, user),
-);
+route("DELETE", "orders/:id/discount/:discountId", "pos.open", ({ params, body, user }) => {
+  authorizeSensitiveAction(user, "discount", optStr(body, "managerPin"));
+  return removeDiscount(params.id, params.discountId, user);
+});
 
 // -------------------------------------------------------------------- checkout
 route("GET", "orders/:id/split", "pos.split", ({ params, query }) => {

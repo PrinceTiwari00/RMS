@@ -307,8 +307,8 @@ export function addLine(orderId: string, input: AddLineInput, actor?: SessionUse
   const order = requireOrder(orderId);
   if (order.status === "closed") throw badRequest("That check is already closed");
 
-  const item = get<{ id: string; name: string; price: number; course: string; station: string; is_available: number }>(
-    "SELECT id, name, price, course, station, is_available FROM menu_items WHERE id = ?",
+  const item = get<{ id: string; name: string; price: number; course: string; station: string; category_id: string | null; is_available: number }>(
+    "SELECT id, name, price, course, station, category_id, is_available FROM menu_items WHERE id = ?",
     input.menuItemId,
   );
   if (!item) throw notFound("Menu item not found");
@@ -318,6 +318,9 @@ export function addLine(orderId: string, input: AddLineInput, actor?: SessionUse
   if (!Number.isFinite(quantity)) throw badRequest("Quantity must be a positive number");
 
   const resolved = validateModifierSelection(item.id, input.modifiers ?? []);
+  // Category routing is snapshotted onto the new line. Later configuration
+  // changes therefore cannot move food that is already on a station screen.
+  const routedStation = getSettings().kdsRouting[item.category_id ?? ""] || item.station;
   const lineId = uuid();
   const stamp = nowStamp();
 
@@ -333,7 +336,7 @@ export function addLine(orderId: string, input: AddLineInput, actor?: SessionUse
       quantity,
       item.price, // price locked at time of sale
       item.course,
-      item.station,
+      routedStation,
       Math.max(0, Math.round(Number(input.seat ?? 0))),
       String(input.note ?? "").slice(0, 280),
       stamp,
@@ -407,7 +410,7 @@ export function updateLine(
  * after that it becomes an audited void so the kitchen is told to stop and the
  * Z-report can account for the lost sale.
  */
-export function removeLine(orderId: string, lineId: string, reason: string, actor: SessionUser | null): OrderSnapshot {
+export function removeLine(orderId: string, lineId: string, reason: string, actor: SessionUser | null, approver: SessionUser | null = null): OrderSnapshot {
   const line = get<LineRow>("SELECT * FROM order_items WHERE id = ? AND order_id = ?", lineId, orderId);
   if (!line) throw notFound("Ticket line not found");
   const order = requireOrder(orderId);
@@ -434,12 +437,18 @@ export function removeLine(orderId: string, lineId: string, reason: string, acto
       line.name_snapshot,
       amount,
       reason || "Removed by staff",
-      actor?.id ?? null,
+      approver?.id ?? actor?.id ?? null,
       nowStamp(),
       order.businessDate ?? businessDateNow(),
     );
   });
-  audit(actor, "pos.void", "order_item", lineId, `${line.name_snapshot} × ${line.quantity} — ${reason || "no reason given"}`);
+  audit(
+    actor,
+    "pos.void",
+    "order_item",
+    lineId,
+    `${line.name_snapshot} × ${line.quantity} — ${reason || "no reason given"}${approver ? ` · approved by ${approver.name}` : ""}`,
+  );
   return requireOrder(orderId);
 }
 
@@ -499,7 +508,7 @@ export interface DiscountInput {
   lineId?: string | null;
 }
 
-export function applyDiscount(orderId: string, input: DiscountInput, actor: SessionUser | null): OrderSnapshot {
+export function applyDiscount(orderId: string, input: DiscountInput, actor: SessionUser | null, approver: SessionUser | null = null): OrderSnapshot {
   const order = requireOrder(orderId);
   if (order.status === "closed") throw badRequest("That check is already closed");
   const base = input.lineId ? lineTotalOf(input.lineId) : order.subtotal;
@@ -518,10 +527,16 @@ export function applyDiscount(orderId: string, input: DiscountInput, actor: Sess
     input.kind === "percent" ? Math.round(input.value * 100) : amount,
     amount,
     reason,
-    actor?.id ?? null,
+    approver?.id ?? actor?.id ?? null,
     nowStamp(),
   );
-  audit(actor, "pos.discount", "order", orderId, `${input.kind} ${input.kind === "percent" ? `${input.value}%` : `${amount / 100}`} — ${reason}`);
+  audit(
+    actor,
+    "pos.discount",
+    "order",
+    orderId,
+    `${input.kind} ${input.kind === "percent" ? `${input.value}%` : `${amount / 100}`} — ${reason}${approver ? ` · approved by ${approver.name}` : ""}`,
+  );
   return requireOrder(orderId);
 }
 

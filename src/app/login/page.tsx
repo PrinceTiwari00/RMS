@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useStore } from "@/lib/store";
 import { api, errorMessage } from "@/lib/api";
 import { Avatar, Chip, Icon, toast } from "@/components/ui";
@@ -29,9 +30,14 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [shake, setShake] = useState(false);
   const [hints, setHints] = useState<StaffMember[]>([]);
+  const [sessionInfo, setSessionInfo] = useState<{ demoMode: boolean; setupRequired: boolean } | null>(null);
   const submitLock = useRef(false);
 
-  const demoMode = state?.demoMode ?? true;
+  const demoMode = state?.demoMode ?? sessionInfo?.demoMode ?? true;
+
+  useEffect(() => {
+    api.get<{ demoMode: boolean; setupRequired: boolean }>("session").then(setSessionInfo).catch(() => setSessionInfo(null));
+  }, []);
 
   // Demo PIN hints. The plain PIN only ever leaves the server in demo mode.
   useEffect(() => {
@@ -267,6 +273,14 @@ export default function LoginPage() {
               {busy ? "Signing in…" : loading ? "Loading…" : "Sign in"}
             </button>
           </div>
+
+          {sessionInfo?.setupRequired && (
+            <div className="card card-pad mt-3 border-brand-200 bg-brand-50">
+              <p className="flex items-center gap-2 text-[12px] font-extrabold text-brand-800"><Icon name="lock" className="size-4" />First-run setup required</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-700">This production database has no staff yet. Use the deployment setup token to create the initial manager.</p>
+              <Link href="/setup" className="btn btn-primary mt-3 w-full">Initialize restaurant<Icon name="arrow-right" className="size-4" /></Link>
+            </div>
+          )}
 
           {demoMode && hints.length > 0 && (
             <div className="card card-pad mt-3">

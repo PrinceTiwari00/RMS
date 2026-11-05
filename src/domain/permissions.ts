@@ -111,6 +111,28 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
     permissions: ["host.seat", "host.waitlist", "pos.open", "kds.view"],
   },
   {
+    name: "shift_lead",
+    title: "Shift Lead",
+    hourlyRate: 30000,
+    permissions: [
+      "pos.open",
+      "pos.send",
+      "pos.fire",
+      "pos.void",
+      "pos.discount",
+      "pos.checkout",
+      "pos.split",
+      "host.seat",
+      "host.waitlist",
+      "kds.view",
+      "kds.ready",
+      "kds.bump",
+      "kds.prep",
+      "admin.timeclock",
+      "reports.zreport",
+    ],
+  },
+  {
     name: "cook",
     title: "Line Cook",
     hourlyRate: 21000,
@@ -131,11 +153,15 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
 ];
 
 export function permissionsFor(role: string, granted?: Iterable<string>): Permission[] {
+  // A persisted role matrix is authoritative: grants can be removed as well as
+  // added. The curated definition is only a fallback for legacy rows that have
+  // never been seeded or edited.
+  if (granted !== undefined) {
+    const stored = new Set(granted);
+    return ALL.filter((permission) => stored.has(permission) || stored.has("*"));
+  }
   const definition = ROLE_DEFINITIONS.find((candidate) => candidate.name === role);
-  const base = definition ? definition.permissions : [];
-  const merged = new Set<string>(base);
-  for (const extra of granted ?? []) merged.add(extra);
-  return ALL.filter((permission) => merged.has(permission));
+  return definition ? [...definition.permissions] : [];
 }
 
 export function can(permissions: Iterable<string>, permission: Permission): boolean {

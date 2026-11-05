@@ -22,5 +22,7 @@ import "./staff";
 import "./labor";
 import "./reports";
 import "./customer";
+import "./hardware";
+import "./setup";
 
 export {};

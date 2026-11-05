@@ -16,7 +16,7 @@ describe("demo seed", () => {
 
   it("creates the full restaurant catalogue", () => {
     expect(Number(scalar("SELECT COUNT(*) FROM settings") ?? 0)).toBeGreaterThan(15);
-    expect(Number(scalar("SELECT COUNT(*) FROM roles") ?? 0)).toBe(7);
+    expect(Number(scalar("SELECT COUNT(*) FROM roles") ?? 0)).toBe(8);
     expect(Number(scalar("SELECT COUNT(*) FROM employees") ?? 0)).toBe(11);
     expect(Number(scalar("SELECT COUNT(*) FROM sections") ?? 0)).toBe(4);
     expect(Number(scalar("SELECT COUNT(*) FROM tables") ?? 0)).toBe(21);

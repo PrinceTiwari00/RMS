@@ -173,8 +173,11 @@ export function GuestOrdering({ token }: { token: string }) {
     <div className="min-h-screen bg-paper pb-24 lg:pb-0">
       <header className="border-b border-rule bg-paper-raised">
         <div className="mx-auto flex max-w-[1500px] items-center gap-3 px-4 py-3 lg:px-6">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-500 text-sm font-black text-white">
-            {data.restaurantName.slice(0, 2).toUpperCase()}
+          <span className="flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-brand-500 text-sm font-black text-white">
+            {data.settings.logoDataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={data.settings.logoDataUrl} alt={`${data.restaurantName} logo`} className="size-full bg-white object-contain" />
+            ) : data.restaurantName.slice(0, 2).toUpperCase()}
           </span>
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-base font-black text-ink">{data.restaurantName}</h1>
@@ -586,6 +589,10 @@ function GuestReceipt({ data, result, onDone }: { data: GuestResponse; result: P
           <p className="mt-1 text-sm text-white/80">Your payment has been recorded at {data.restaurantName}.</p>
         </div>
         <div className="p-5">
+          {data.settings.logoDataUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={data.settings.logoDataUrl} alt={`${data.restaurantName} logo`} className="mx-auto mb-4 h-12 max-w-40 object-contain" />
+          )}
           <div className="mb-4 flex items-center justify-between text-sm">
             <span className="font-bold text-ink">Check #{result.order.checkNumber ?? "—"}</span>
             <Chip tone="ok">Paid</Chip>

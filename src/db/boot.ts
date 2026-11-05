@@ -7,21 +7,24 @@
  * touching a table, which makes a fresh clone (or a wiped `data/` directory)
  * come up with the full demo dataset instead of an empty shell.
  *
- * Everything here is idempotent — `migrate()` uses CREATE TABLE IF NOT EXISTS
- * and `seedIfEmpty()` is a no-op once the seed-version key exists — so it is
- * safe to call on every request. A module-level flag keeps it to one real pass
- * per server process.
+ * Everything here is idempotent. Demo seeding runs only outside production;
+ * production performs schema migration and then uses the token-protected
+ * first-run setup. A module-level flag keeps this to one pass per process.
  */
 import { db, migrate } from "@/db/client";
 import { seedIfEmpty } from "@/db/seed";
+import { isProduction, validateProductionEnvironment } from "@/lib/session";
 
 let ready = false;
 
 export function ensureDatabase(): void {
   if (ready) return;
+  validateProductionEnvironment();
   db();
   migrate();
-  seedIfEmpty();
+  // Demo identities are opt-in development data, never a production recovery
+  // mechanism. A fresh production database is initialized through /setup.
+  if (!isProduction()) seedIfEmpty();
   ready = true;
 }
 

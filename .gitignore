@@ -16,6 +16,7 @@ __pycache__/
 
 # local database + runtime data (never commit restaurant data)
 data/
+backups/
 *.db
 *.db-shm
 *.db-wal
@@ -24,6 +25,7 @@ data/
 # env + secrets
 .env
 .env*.local
+.runtime/
 
 # misc
 .DS_Store

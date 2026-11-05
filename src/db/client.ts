@@ -37,7 +37,7 @@ function normalizeAll(params: unknown[]): SqlValue[] {
 function databasePath(): string {
   const configured = process.env.RMS_DB_PATH;
   if (configured) return configured;
-  return path.join(process.cwd(), "data", "rms.db");
+  return path.join(process.env.RMS_DATA_DIR ?? path.join(process.cwd(), "data"), "rms.db");
 }
 
 function openDatabase(): DatabaseSync {
@@ -140,8 +140,14 @@ const schemaCache: { sql?: string } = {};
 /** Idempotent schema creation, safe to call on every cold start. */
 export function migrate(): void {
   if (!schemaCache.sql) {
+    // Next's standalone bundle can retain an absolute build-machine module URL.
+    // Prefer the colocated source file, then fall back to the runtime workspace
+    // copy shipped by the Dockerfile.
     const here = path.dirname(fileURLToPath(import.meta.url));
-    schemaCache.sql = fs.readFileSync(path.join(here, "schema.sql"), "utf8");
+    const colocated = path.join(here, "schema.sql");
+    const workspace = path.join(process.cwd(), "src", "db", "schema.sql");
+    const schemaPath = fs.existsSync(colocated) ? colocated : workspace;
+    schemaCache.sql = fs.readFileSync(schemaPath, "utf8");
   }
   db().exec(schemaCache.sql);
 }
