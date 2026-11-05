@@ -1,0 +1,173 @@
+/**
+ * A very small pattern router for the `/api/[...path]` catch-all.
+ *
+ * Keeping every endpoint in one registry means authentication, CSRF, permission
+ * checks, validation errors and JSON encoding are handled exactly once instead
+ * of being repeated across forty route files.
+ */
+import { NextResponse } from "next/server";
+import { can, type Permission } from "@/domain/permissions";
+import type { SessionUser } from "./identity";
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
+}
+
+export const badRequest = (message: string) => new ApiError(400, message);
+export const unauthorized = (message = "Sign in to continue") => new ApiError(401, message);
+export const forbidden = (message = "You do not have permission to do that") => new ApiError(403, message);
+export const notFound = (message = "Not found") => new ApiError(404, message);
+export const conflict = (message: string) => new ApiError(409, message);
+
+export interface RouteContext {
+  params: Record<string, string>;
+  query: URLSearchParams;
+  body: Record<string, unknown>;
+  user: SessionUser;
+  /** Null when the endpoint is public (guest QR ordering, customer display). */
+  anonymous: SessionUser | null;
+}
+
+export type Handler = (context: RouteContext) => unknown | Promise<unknown>;
+
+interface Route {
+  method: string;
+  segments: string[];
+  permission: Permission | null;
+  /** Public routes skip the staff session requirement. */
+  isPublic: boolean;
+  handler: Handler;
+}
+
+const routes: Route[] = [];
+
+function compile(pattern: string): string[] {
+  return pattern.split("/").filter(Boolean);
+}
+
+/** Register an authenticated, permission-checked endpoint. */
+export function route(
+  method: string,
+  pattern: string,
+  permission: Permission | null,
+  handler: Handler,
+): void {
+  routes.push({ method: method.toUpperCase(), segments: compile(pattern), permission, isPublic: false, handler });
+}
+
+/** Register an endpoint reachable without a staff session (QR guests, CFD). */
+export function publicRoute(method: string, pattern: string, handler: Handler): void {
+  routes.push({ method: method.toUpperCase(), segments: compile(pattern), permission: null, isPublic: true, handler });
+}
+
+function match(route: Route, method: string, segments: string[]): Record<string, string> | null {
+  if (route.method !== method.toUpperCase()) return null;
+  if (route.segments.length !== segments.length) return null;
+  const params: Record<string, string> = {};
+  for (let index = 0; index < route.segments.length; index += 1) {
+    const expected = route.segments[index];
+    const actual = segments[index];
+    if (expected.startsWith(":")) {
+      params[expected.slice(1)] = decodeURIComponent(actual);
+      continue;
+    }
+    if (expected !== actual) return null;
+  }
+  return params;
+}
+
+export interface DispatchInput {
+  method: string;
+  segments: string[];
+  query: URLSearchParams;
+  body: Record<string, unknown>;
+  user: SessionUser | null;
+}
+
+export type DispatchResult =
+  | { kind: "handled"; response: NextResponse }
+  | { kind: "no-match" }
+  | { kind: "forbidden"; response: NextResponse };
+
+export async function dispatch(input: DispatchInput): Promise<DispatchResult> {
+  let matchedMethod = false;
+
+  for (const candidate of routes) {
+    const params = match(candidate, input.method, input.segments);
+    if (!params) continue;
+    matchedMethod = true;
+
+    if (!candidate.isPublic) {
+      if (!input.user) {
+        return {
+          kind: "handled",
+          response: NextResponse.json({ error: "authentication required" }, { status: 401 }),
+        };
+      }
+      if (candidate.permission && !can(input.user.permissions, candidate.permission)) {
+        return {
+          kind: "forbidden",
+          response: NextResponse.json(
+            { error: `missing permission: ${candidate.permission}` },
+            { status: 403 },
+          ),
+        };
+      }
+    }
+
+    try {
+      const result = await candidate.handler({
+        params,
+        query: input.query,
+        body: input.body,
+        user: input.user ?? anonymousUser(),
+        anonymous: input.user,
+      });
+      if (result instanceof NextResponse) return { kind: "handled", response: result };
+      return { kind: "handled", response: NextResponse.json(result ?? { ok: true }, { status: 200 }) };
+    } catch (error) {
+      return { kind: "handled", response: errorResponse(error) };
+    }
+  }
+
+  void matchedMethod;
+  return { kind: "no-match" };
+}
+
+/** Handler helper for resource creation. */
+export function created(data: unknown): NextResponse {
+  return NextResponse.json(data, { status: 201 });
+}
+
+function anonymousUser(): SessionUser {
+  return { id: "anonymous", name: "Guest", initials: "G", color: "#7a8894", role: "guest", roleTitle: "Guest", permissions: [] };
+}
+
+export function errorResponse(error: unknown): NextResponse {
+  if (error instanceof ApiError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+  const message = error instanceof Error ? error.message : "Unexpected error";
+  // Domain rules raise plain Errors for illegal transitions / validation.
+  const isDomain =
+    error instanceof TypeError || error instanceof RangeError ? false : error instanceof Error;
+  if (isDomain && !message.includes("SQLITE")) {
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+  console.error("[rms] unhandled API error", error);
+  return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+}
+
+export function routeTable(): { method: string; pattern: string; permission: string | null; isPublic: boolean }[] {
+  return routes.map((entry) => ({
+    method: entry.method,
+    pattern: `/${entry.segments.join("/")}`,
+    permission: entry.permission,
+    isPublic: entry.isPublic,
+  }));
+}

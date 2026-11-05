@@ -1,0 +1,37 @@
+{
+  "name": "rms",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Multi-role Restaurant Management System \u2014 Front of House, Back of House, Back Office and Customer Self-Service",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p ${PORT:-3000}",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:reset": "vite-node scripts/reset-db.ts",
+    "db:seed": "vite-node scripts/seed.ts"
+  },
+  "dependencies": {
+    "next": "15.5.29",
+    "qrcode": "1.5.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.1.14",
+    "@types/node": "22.15.3",
+    "@types/qrcode": "1.5.5",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.1",
+    "tailwindcss": "4.1.14",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
