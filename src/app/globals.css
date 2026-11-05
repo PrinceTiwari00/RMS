@@ -1,0 +1,399 @@
+@import "tailwindcss";
+
+/**
+ * Design system.
+ *
+ * Two surfaces share one token set: a warm "paper" theme for the front-of-house
+ * and back-office screens, and a dark high-contrast "theatre" theme for the
+ * kitchen displays, where the screen is read from metres away in a bright, wet
+ * room. Everything is local — no CDN fonts, no external CSS — because the
+ * preview renders in a sandboxed iframe with no network access.
+ */
+@theme {
+  /* Brand */
+  --color-brand-50: #eef7f5;
+  --color-brand-100: #d5ece8;
+  --color-brand-200: #aedbd4;
+  --color-brand-300: #7cc3ba;
+  --color-brand-400: #47a398;
+  --color-brand-500: #0f6f66;
+  --color-brand-600: #0d5f57;
+  --color-brand-700: #0b4c46;
+  --color-brand-800: #093b36;
+  --color-brand-900: #072e2a;
+
+  /* Accent (terracotta — used for warnings, the grill station, primary BOH taps) */
+  --color-ember-50: #fdf3ef;
+  --color-ember-100: #fae2d8;
+  --color-ember-200: #f3c2ae;
+  --color-ember-300: #e89b7d;
+  --color-ember-400: #d9714c;
+  --color-ember-500: #c2542f;
+  --color-ember-600: #a54324;
+  --color-ember-700: #83341c;
+  --color-ember-800: #612716;
+  --color-900: #3d1a0e;
+
+  /* Paper surface (FOH + admin) */
+  --color-paper: #f7f5f2;
+  --color-paper-raised: #ffffff;
+  --color-paper-sunken: #efece7;
+  --color-ink: #12181c;
+  --color-ink-soft: #4a555e;
+  --color-ink-faint: #7b8792;
+  --color-rule: #e0dbd4;
+
+  /* Theatre surface (BOH + CFD) */
+  --color-stage: #0c1013;
+  --color-stage-raised: #151b20;
+  --color-stage-card: #1b232a;
+  --color-stage-rule: #2b353d;
+  --color-stage-ink: #f2f6f8;
+  --color-stage-soft: #a8b6c0;
+
+  /* Status */
+  --color-ok: #2f8f5b;
+  --color-ok-soft: #e6f4ec;
+  --color-warn: #c98a1e;
+  --color-warn-soft: #fdf3dd;
+  --color-late: #c0392b;
+  --color-late-soft: #fbe9e7;
+  --color-info: #3d6ea8;
+  --color-info-soft: #e8f0f9;
+
+  /* KDS stations — must match settings.stations */
+  --color-station-grill: #c2542f;
+  --color-station-fry: #c98a1e;
+  --color-station-pantry: #3f8f5f;
+  --color-station-bar: #3d6ea8;
+  --color-station-dessert: #8a5aa8;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", "Noto Sans", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --radius-card: 14px;
+  --radius-chip: 999px;
+}
+
+/**
+ * Table status tokens. `TABLE_STATUS_COLOR` in domain/tables.ts resolves to
+ * these, so the floor plan, the POS table picker and the host stand all agree on
+ * what "seated" looks like without importing React.
+ */
+:root {
+  --table-available: #2f8f5b;
+  --table-seated: #3d6ea8;
+  --table-ordered: #c98a1e;
+  --table-billed: #8a5aa8;
+  --table-dirty: #a4553f;
+}
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "tnum" 1, "cv05" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Tabular figures everywhere money and timers appear, so columns don't jitter. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-ink-faint) 35%, transparent);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--color-ink-faint) 60%, transparent);
+    background-clip: content-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* ------------------------------------------------------------ paper surface */
+  .card {
+    background: var(--color-paper-raised);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-card);
+    box-shadow: 0 1px 2px rgb(18 24 28 / 0.04);
+  }
+
+  .card-pad {
+    padding: 16px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--radius-chip);
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 10px;
+    padding: 9px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.06s ease;
+    user-select: none;
+  }
+  .btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background: var(--color-brand-500);
+    color: #fff;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--color-brand-600);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--color-ink-soft);
+    border-color: var(--color-rule);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--color-paper-sunken);
+    color: var(--color-ink);
+  }
+
+  .btn-danger {
+    background: var(--color-late);
+    color: #fff;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: #a5301f;
+  }
+
+  .btn-soft {
+    background: var(--color-paper-sunken);
+    color: var(--color-ink);
+    border-color: var(--color-rule);
+  }
+  .btn-soft:hover:not(:disabled) {
+    background: var(--color-rule);
+  }
+
+  .field {
+    width: 100%;
+    border-radius: 10px;
+    border: 1px solid var(--color-rule);
+    background: var(--color-paper-raised);
+    padding: 9px 12px;
+    font-size: 14px;
+    color: var(--color-ink);
+  }
+  .field::placeholder {
+    color: var(--color-ink-faint);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--color-brand-400);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-400) 18%, transparent);
+  }
+
+  .label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+    margin-bottom: 5px;
+  }
+
+  /* ----------------------------------------------------------- theatre (BOH) */
+  .stage {
+    background: var(--color-stage);
+    color: var(--color-stage-ink);
+    min-height: 100vh;
+  }
+
+  .stage-card {
+    background: var(--color-stage-card);
+    border: 1px solid var(--color-stage-rule);
+    border-radius: 12px;
+  }
+
+  .stage-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    border: 1px solid var(--color-stage-rule);
+    background: var(--color-stage-raised);
+    color: var(--color-stage-ink);
+    cursor: pointer;
+    transition: background-color 0.12s ease, transform 0.06s ease;
+  }
+  .stage-btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .stage-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .stage-btn-go {
+    background: var(--color-ok);
+    border-color: var(--color-ok);
+    color: #fff;
+  }
+  .stage-btn-go:hover:not(:disabled) {
+    background: #28794d;
+  }
+
+  .stage-btn-fire {
+    background: var(--color-ember-500);
+    border-color: var(--color-ember-500);
+    color: #fff;
+  }
+  .stage-btn-fire:hover:not(:disabled) {
+    background: var(--color-ember-600);
+  }
+
+  /* Urgency bands — the single most important signal on a KDS screen. */
+  .urg-ok {
+    border-left: 4px solid var(--color-ok);
+  }
+  .urg-warn {
+    border-left: 4px solid var(--color-warn);
+    background: color-mix(in srgb, var(--color-warn) 12%, var(--color-stage-card));
+  }
+  .urg-late {
+    border-left: 4px solid var(--color-late);
+    background: color-mix(in srgb, var(--color-late) 16%, var(--color-stage-card));
+    animation: pulse-late 1.6s ease-in-out infinite;
+  }
+  .urg-ready {
+    border-left: 4px solid var(--color-info);
+    opacity: 0.72;
+  }
+  .urg-hold {
+    border-left: 4px solid var(--color-stage-rule);
+    opacity: 0.6;
+  }
+
+  @keyframes pulse-late {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-late) 45%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 6px transparent;
+    }
+  }
+
+  /* ------------------------------------------------------------------ tables */
+  .grid-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+  }
+  .grid-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--color-paper-sunken);
+    color: var(--color-ink-faint);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-rule);
+    white-space: nowrap;
+  }
+  .grid-table tbody td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-rule);
+    vertical-align: middle;
+  }
+  .grid-table tbody tr:hover td {
+    background: var(--color-paper);
+  }
+  .grid-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stage-table thead th {
+    background: var(--color-stage-raised);
+    color: var(--color-stage-soft);
+    border-bottom-color: var(--color-stage-rule);
+  }
+  .stage-table tbody td {
+    border-bottom-color: var(--color-stage-rule);
+  }
+  .stage-table tbody tr:hover td {
+    background: var(--color-stage-raised);
+  }
+}
+
+@layer utilities {
+  .scroll-y {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
