@@ -11,11 +11,10 @@
  * Money is integer paisa throughout (1 NPR = 100 paisa).
  */
 import { all, get, run, tx, uuid, migrate } from "@/db/client";
-import { ROLE_DEFINITIONS, type Permission } from "@/domain/permissions";
-import { DEFAULT_STATIONS } from "@/domain/kds";
 import { random, type Random } from "@/lib/rng";
 import { shiftDate, today, zoned, atClock, businessDateNow } from "@/domain/time";
 import { seedHistory } from "./seed-history";
+import { seedCoreRoles, seedCoreStations } from "./core";
 import {
   seedHosting,
   seedInventoryOps,
@@ -30,6 +29,9 @@ export const SEED_VERSION = "rms-demo-v2";
 const SETTINGS: Record<string, string> = {
   restaurant_name: "Terai Kitchen & Bar",
   restaurant_tagline: "Nepali · Indian · Continental",
+  legal_tax_entity: "Terai Hospitality Pvt. Ltd.",
+  website: "https://teraikitchen.np",
+  time_zone: "Asia/Kathmandu",
   address: "Chhapaiya Road, Birgunj 44700, Madhesh, Nepal",
   phone: "+977 981 234 5678",
   pan_vat: "402198745",
@@ -39,7 +41,7 @@ const SETTINGS: Record<string, string> = {
   vat_rate: "13",
   vat_inclusive: "0",
   service_charge_rate: "10",
-  tip_presets: "5,10,15",
+  tip_presets: "15,18,20,25",
   cash_float: "1500000", // Rs 15,000 opening float in paisa
   business_day_rollover: "4",
   kds_warn_minutes: "8",
@@ -490,33 +492,11 @@ function seedTerminals(): void {
 }
 
 function seedStations(): void {
-  // Stations live in settings as JSON so the admin can extend them without a
-  // migration; the KDS reads the canonical list from domain/kds.
-  run(
-    "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('stations', ?, ?)",
-    JSON.stringify(DEFAULT_STATIONS),
-    nowStamp(),
-  );
+  seedCoreStations();
 }
 
 function seedRoles(): Map<string, string> {
-  const ids = new Map<string, string>();
-  ROLE_DEFINITIONS.forEach((definition, index) => {
-    const id = uuid();
-    ids.set(definition.name, id);
-    run(
-      "INSERT INTO roles (id, name, title, hourly_rate, is_system, sort_order) VALUES (?, ?, ?, ?, 1, ?)",
-      id,
-      definition.name,
-      definition.title,
-      definition.hourlyRate,
-      index,
-    );
-    for (const permission of definition.permissions as Permission[]) {
-      run("INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES (?, ?)", id, permission);
-    }
-  });
-  return ids;
+  return seedCoreRoles();
 }
 
 function seedStaff(roles: Map<string, string>): Map<string, { id: string; name: string; role: string }> {

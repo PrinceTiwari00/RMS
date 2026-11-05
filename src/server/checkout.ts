@@ -140,6 +140,9 @@ export function closeCheck(orderId: string, input: CloseInput, actor: SessionUse
 
   const storedExposure = offlineExposure();
   const offlineTenders = tenders.filter((tender) => tender.method === "card" && tender.authCode?.startsWith("OFFLINE"));
+  if (offlineTenders.length && !settings.offlinePaymentsEnabled) {
+    throw badRequest("Offline card approvals are disabled in Order Workflow settings");
+  }
   const offlineAmount = offlineTenders.reduce((total, tender) => total + tender.amount, 0);
   if (offlineAmount > storedExposure.available) {
     throw badRequest(`Store-and-forward risk limit reached (Rs ${(storedExposure.available / 100).toFixed(2)} available)`);

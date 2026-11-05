@@ -14,12 +14,25 @@ export { SESSION_COOKIE, CSRF_COOKIE };
 
 const DEFAULT_SECRET = "rms-development-secret-change-me-0123456789abcdef";
 
+/** Fail closed rather than issuing production sessions with the demo secret. */
+export function validateProductionEnvironment(): void {
+  if (!isProduction()) return;
+  const configured = process.env.RMS_SECRET_KEY ?? "";
+  if (configured.trim().length < 32 || configured === DEFAULT_SECRET) {
+    throw new Error("RMS_SECRET_KEY must be a stable random value of at least 32 characters in production");
+  }
+}
+
 function secret(): string {
+  validateProductionEnvironment();
   return process.env.RMS_SECRET_KEY || DEFAULT_SECRET;
 }
 
 export function isProduction(): boolean {
-  return (process.env.RMS_ENV ?? "demo").toLowerCase() === "production";
+  const explicitMode = process.env.RMS_ENV?.toLowerCase();
+  // An explicit RMS_ENV=demo supports reviewed demo/preview builds. Otherwise
+  // a conventional NODE_ENV=production start must never fall back to demo data.
+  return explicitMode ? explicitMode === "production" : process.env.NODE_ENV === "production";
 }
 
 export function isDemoMode(): boolean {

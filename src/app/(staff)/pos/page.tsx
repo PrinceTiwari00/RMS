@@ -15,12 +15,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, errorMessage, qs } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import { usePoll, useStore } from "@/lib/store";
 import { Button, Chip, Empty, Icon, Modal, TextInput, toast, Avatar } from "@/components/ui";
 import { ModifierModal, defaultOptions, type ModifierSelection } from "@/components/ModifierModal";
 import { formatMoney } from "@/domain/money";
 import type { MenuItem, OrderSnapshot, TableSnapshot } from "@/types";
+import type { ServiceStyle } from "@/domain/settings";
 
 export default function PosPage() {
   const { state, user, allowed } = useStore();
@@ -123,15 +124,19 @@ export default function PosPage() {
       if (!activeOrder) return;
       const reason = window.prompt(`Why is “${name}” being voided?`, "Guest changed order");
       if (reason === null) return;
+      const managerPin = settings?.managerPinForVoid && !allowed("admin.users")
+        ? window.prompt("Manager PIN required to approve this void") ?? undefined
+        : undefined;
+      if (settings?.managerPinForVoid && !allowed("admin.users") && managerPin === undefined) return;
       try {
-        await api.del(`orders/${activeOrder.id}/lines/${lineId}${qs({ reason: reason || "Voided" })}`);
+        await api.del(`orders/${activeOrder.id}/lines/${lineId}`, { reason: reason || "Voided", managerPin });
         toast(`Voided ${name}`, "ok");
         await reloadOrders();
       } catch (error) {
         toast(errorMessage(error), "late");
       }
     },
-    [activeOrder, reloadOrders],
+    [activeOrder, reloadOrders, settings?.managerPinForVoid, allowed],
   );
 
   const send = useCallback(async () => {
@@ -385,7 +390,7 @@ export default function PosPage() {
                                   <Icon name="edit" className="size-3.5" />
                                 </button>
                               )}
-                              {allowed("pos.void") && (
+                              {(allowed("pos.void") || settings?.managerPinForVoid) && (
                                 <button
                                   type="button"
                                   aria-label={`Void ${line.name}`}
@@ -500,6 +505,7 @@ export default function PosPage() {
       <NewTicketModal
         open={ticketOpen}
         tables={tables}
+        operatingMode={settings?.operatingMode ?? "full_service"}
         onClose={() => setTicketOpen(false)}
         onCreated={(orderId) => {
           setActiveOrderId(orderId);
@@ -568,11 +574,13 @@ function RailChip({ active, onClick, children }: { active: boolean; onClick: () 
 function NewTicketModal({
   open,
   tables,
+  operatingMode,
   onClose,
   onCreated,
 }: {
   open: boolean;
   tables: TableSnapshot[];
+  operatingMode: ServiceStyle;
   onClose: () => void;
   onCreated: (orderId: string) => void;
 }) {
@@ -583,6 +591,10 @@ function NewTicketModal({
   const [busy, setBusy] = useState(false);
 
   const available = tables.filter((table) => table.status === "available");
+
+  useEffect(() => {
+    if (open) setChannel(operatingMode === "quick_service" ? "takeout" : "dine_in");
+  }, [open, operatingMode]);
 
   async function create(tableId?: string) {
     setBusy(true);

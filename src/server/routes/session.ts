@@ -17,6 +17,7 @@ import { audit } from "@/server/audit";
 import { DENOMINATIONS, rangePresets } from "@/server/reports";
 import { TENDER_METHODS, cashSuggestions } from "@/domain/checkout";
 import { tipSuggestions } from "@/domain/pricing";
+import { productionSetupStatus } from "@/server/bootstrap";
 
 const COOKIE_BASE = {
   httpOnly: true,
@@ -52,6 +53,7 @@ publicRoute("GET", "session", ({ anonymous }) => ({
   user: anonymous,
   csrfToken: null,
   demoMode: !isProduction(),
+  setupRequired: productionSetupStatus().required,
 }));
 
 // -------------------------------------------------------------------- bootstrap
@@ -62,7 +64,7 @@ route("GET", "metrics", null, () => buildMetrics());
 route("GET", "state/staff", "pos.open", () => ({ staff: getStaff() }));
 
 // --------------------------------------------------------------------- settings
-route("GET", "settings", null, () => ({
+route("GET", "settings", "admin.settings", () => ({
   settings: getSettings(),
   raw: getRawSettings(),
   stations: getStations(),
@@ -77,8 +79,8 @@ route("PATCH", "settings", "admin.settings", ({ body, user }) => {
     else patch[key] = String(value);
   }
   if (!Object.keys(patch).length) throw badRequest("Nothing to update");
-  setSettings(patch, user);
-  return { settings: getSettings(), stations: getStations() };
+  const raw = setSettings(patch, user);
+  return { settings: getSettings(), raw, stations: getStations() };
 });
 
 route("GET", "stations", null, () => ({ stations: getStations() }));

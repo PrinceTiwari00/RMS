@@ -10,9 +10,16 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const productionMode = process.env.RMS_ENV
+  ? process.env.RMS_ENV.toLowerCase() === "production"
+  : process.env.NODE_ENV === "production";
+if (productionMode && process.env.RMS_ALLOW_DEMO_SEED !== "1") {
+  throw new Error("Refusing to install demo accounts in production. Use the /setup first-run flow instead.");
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
-const dbPath = process.env.RMS_DB_PATH ?? join(root, "data", "rms.db");
+const dbPath = process.env.RMS_DB_PATH ?? join(process.env.RMS_DATA_DIR ?? join(root, "data"), "rms.db");
 mkdirSync(dirname(dbPath), { recursive: true });
 process.env.RMS_DB_PATH = dbPath;
 

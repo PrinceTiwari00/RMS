@@ -536,9 +536,10 @@ describe("role based access control", () => {
     expect(cook).not.toContain("pos.checkout");
   });
 
-  it("merges individually granted extras", () => {
+  it("treats a persisted matrix as authoritative, including revocations", () => {
     const server = permissionsFor("server", ["pos.void"]);
     expect(server).toContain("pos.void");
+    expect(server).not.toContain("pos.open");
     expect(can(server, "pos.void")).toBe(true);
     expect(can(new Set(["*"]), "admin.users")).toBe(true);
   });

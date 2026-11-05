@@ -74,7 +74,7 @@ const NAV: NavGroup[] = [
       { href: "/admin/floorplan", label: "Floor Plan Builder", icon: "floor", permission: "admin.floorplan" },
       { href: "/admin/users", label: "Users & Permissions", icon: "users", permission: "admin.users" },
       { href: "/admin/qrcodes", label: "QR Codes", icon: "qr", permission: "admin.settings" },
-      { href: "/admin/settings", label: "Business Settings", icon: "settings", permission: "admin.settings" },
+      { href: "/admin/settings", label: "Settings", icon: "settings", permission: "admin.settings" },
     ],
   },
   {
@@ -127,6 +127,29 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Close the mobile drawer on navigation.
   useEffect(() => setNavOpen(false), [pathname]);
 
+  // Shared staff terminals lock after the configured inactivity window. This
+  // deliberately lives in the staff shell: kitchen theatre displays and public
+  // guest ordering do not inherit the register's lock timer.
+  useEffect(() => {
+    const seconds = state?.settings.autoLockSeconds ?? 0;
+    if (!state?.user.id || seconds <= 0) return;
+    let timer: number;
+    const reset = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        toast("Terminal locked after inactivity", "neutral");
+        void signOut();
+      }, seconds * 1000);
+    };
+    const events = ["pointerdown", "keydown", "touchstart", "mousemove"] as const;
+    for (const event of events) window.addEventListener(event, reset, { passive: true });
+    reset();
+    return () => {
+      window.clearTimeout(timer);
+      for (const event of events) window.removeEventListener(event, reset);
+    };
+  }, [state?.settings.autoLockSeconds, state?.user.id, signOut]);
+
   if (loading || !state) {
     return (
       <div className="flex min-h-screen items-center justify-center gap-3 text-ink-faint">
@@ -155,8 +178,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         }`}
       >
         <div className="flex items-center gap-2.5 border-b border-rule px-4 py-3.5">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-brand-500 text-base font-black text-white">
-            TK
+          <span className="flex size-9 items-center justify-center overflow-hidden rounded-xl bg-brand-500 text-base font-black text-white">
+            {state.settings.logoDataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={state.settings.logoDataUrl} alt="" className="size-full bg-white object-contain" />
+            ) : (
+              state.restaurant.name.slice(0, 2).toUpperCase()
+            )}
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-extrabold leading-tight text-ink">{state.restaurant.name}</p>

@@ -9,6 +9,7 @@
 import { route, created, badRequest } from "@/server/router";
 import {
   createEmployee,
+  createRole,
   deactivateEmployee,
   getRoles,
   getStaff,
@@ -77,6 +78,21 @@ route("POST", "staff/:id/deactivate", "admin.users", ({ params, user }) => {
 });
 
 // ------------------------------------------------------------------------ roles
+route("POST", "roles", "admin.users", ({ body, user }) =>
+  created({
+    role: createRole(
+      {
+        title: required(body, "title", "Role title"),
+        name: optStr(body, "name"),
+        hourlyRate: has(body, "hourlyRate") ? paisa(body, "hourlyRate") : 0,
+        permissions: strArr(body, "permissions"),
+      },
+      user,
+    ),
+    roles: getRoles(),
+  }),
+);
+
 route("GET", "roles", "admin.users", () => ({
   roles: getRoles(),
   catalogue: permissionCatalogue(),

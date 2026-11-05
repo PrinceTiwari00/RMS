@@ -3,6 +3,7 @@ import { ensureDatabase } from "@/db/boot";
 import { currentEmployeeId } from "@/lib/session";
 import { loadUser } from "@/server/identity";
 import { can } from "@/domain/permissions";
+import { productionSetupStatus } from "@/server/bootstrap";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function IndexPage() {
   ensureDatabase();
+  if (productionSetupStatus().required) redirect("/setup");
   const employeeId = await currentEmployeeId();
   const user = employeeId ? loadUser(employeeId) : null;
   if (!user) redirect("/login");

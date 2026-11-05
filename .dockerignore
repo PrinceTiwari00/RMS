@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+data
+backups
+coverage
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.log
+scratch
+.runtime

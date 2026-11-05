@@ -53,8 +53,11 @@ export function CfdDisplay() {
   return (
     <div className="stage flex min-h-screen flex-col">
       <header className="flex min-h-[92px] flex-wrap items-center gap-4 border-b border-stage-rule bg-stage-raised px-5 py-3">
-        <span className="flex size-14 items-center justify-center rounded-2xl bg-brand-500 text-xl font-black text-white">
-          {data.restaurantName.slice(0, 2).toUpperCase()}
+        <span className="flex size-14 items-center justify-center overflow-hidden rounded-2xl bg-brand-500 text-xl font-black text-white">
+          {data.settings.logoDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={data.settings.logoDataUrl} alt={`${data.restaurantName} logo`} className="size-full bg-white object-contain" />
+          ) : data.restaurantName.slice(0, 2).toUpperCase()}
         </span>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-2xl font-black tracking-tight">{data.restaurantName}</h1>

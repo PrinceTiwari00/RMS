@@ -1,0 +1,4 @@
+# Install as /etc/cron.d/rms-backup after confirming the checkout path.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+17 3 * * * root /opt/rms/scripts/backup.sh >> /var/log/rms-backup.log 2>&1

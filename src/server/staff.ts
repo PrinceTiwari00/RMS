@@ -1,19 +1,20 @@
 /**
  * Staff service — employees, PIN sign-in, roles and granular permissions.
  *
- * PINs are stored hashed, never in plain text. A sign-in resolves the employee,
- * verifies the PIN with a constant-time compare, records the audit entry and
- * optionally opens a time-clock entry so the labour report is accurate.
+ * New and changed PINs are salted and hashed with scrypt. Legacy hashes remain
+ * verifiable for migration; plaintext samples authenticate only in demo mode.
+ * A sign-in records an audit entry and optionally opens a time-clock entry.
  */
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { all, get, run, tx, uuid } from "@/db/client";
-import { badRequest, notFound, unauthorized } from "@/server/router";
+import { badRequest, forbidden, notFound, unauthorized } from "@/server/router";
 import { audit, recentAudit } from "@/server/audit";
-import { PERMISSIONS, permissionsFor, ROLE_DEFINITIONS, PERMISSION_GROUPS, type Permission } from "@/domain/permissions";
+import { can, PERMISSIONS, permissionsFor, ROLE_DEFINITIONS, PERMISSION_GROUPS, type Permission } from "@/domain/permissions";
 import { openTimeEntry } from "@/server/labor";
 import { isDemoMode } from "@/lib/session";
 import { nowStamp } from "@/domain/time";
 import type { AuditEntry, RoleInfo, SessionUser, StaffMember } from "@/types";
+import { getSettings } from "@/server/settings";
 
 interface EmployeeRow {
   id: string;
@@ -38,23 +39,44 @@ const EMPLOYEE_SELECT = `
            ORDER BY t.clock_in DESC LIMIT 1) AS open_entry
     FROM employees e LEFT JOIN roles r ON r.id = e.role_id`;
 
-/** PINs are hashed at rest; the demo seed stores a hash too. */
+/** New and changed PINs use a unique salt and a memory-hard derivation. */
 export function hashPin(pin: string): string {
-  return createHash("sha256").update(`rms:${pin}`).digest("hex");
+  const salt = randomBytes(16).toString("base64url");
+  const derived = scryptSync(pin, salt, 64).toString("base64url");
+  return `scrypt$${salt}$${derived}`;
 }
 
 function pinMatches(stored: string, candidate: string): boolean {
-  const a = Buffer.from(stored ?? "");
-  const b = Buffer.from(hashPin(candidate));
-  // Tolerate legacy plain-text PINs written by the demo seed.
+  if (stored.startsWith("scrypt$")) {
+    const [, salt, expected] = stored.split("$");
+    if (!salt || !expected) return false;
+    try {
+      const actual = scryptSync(candidate, salt, 64);
+      const expectedBuffer = Buffer.from(expected, "base64url");
+      return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
+    } catch {
+      return false;
+    }
+  }
+
+  // Backward compatibility for databases created before salted scrypt. These
+  // hashes are upgraded whenever the employee's PIN is next changed.
+  const legacy = createHash("sha256").update(`rms:${candidate}`).digest("hex");
+  const storedBuffer = Buffer.from(stored ?? "");
+  const legacyBuffer = Buffer.from(legacy);
+  if (storedBuffer.length === legacyBuffer.length && timingSafeEqual(storedBuffer, legacyBuffer)) return true;
+
+  // The original demo seed deliberately exposes its sample PINs on the PIN pad.
+  // Never authenticate plaintext records in production mode.
   const plain = Buffer.from(candidate);
-  if (a.length === b.length && timingSafeEqual(a, b)) return true;
-  if (a.length === plain.length && timingSafeEqual(a, plain)) return true;
-  return false;
+  return isDemoMode() && storedBuffer.length === plain.length && timingSafeEqual(storedBuffer, plain);
 }
 
-export function validatePin(pin: string): void {
+export function validatePin(pin: string, configuredLength?: 4 | 6): void {
   if (!/^\d{4}(\d{2})?$/.test(String(pin ?? ""))) throw badRequest("PIN must be 4 or 6 digits");
+  if (configuredLength && String(pin).length !== configuredLength) {
+    throw badRequest(`PIN must be exactly ${configuredLength} digits for this restaurant`);
+  }
 }
 
 export function getStaff(filter: { includeInactive?: boolean; role?: string } = {}): StaffMember[] {
@@ -83,7 +105,7 @@ export function getStaff(filter: { includeInactive?: boolean; role?: string } = 
         clockedIn: Boolean(row.open_entry),
         currentEntryId: row.open_entry,
         // Only ever exposed in demo mode, purely as an on-screen hint.
-        ...(showPin ? { pin: row.pin.length === 64 ? "" : row.pin } : {}),
+        ...(showPin && /^\d{4}(\d{2})?$/.test(row.pin) ? { pin: row.pin } : {}),
       };
     });
 }
@@ -129,6 +151,19 @@ export function signInWithPin(pin: string, clockIn: boolean): { user: SessionUse
   return { user: toSessionUser(row), clockedIn, entryId };
 }
 
+/** Verify a one-off manager approval without creating a second staff session. */
+export function verifyManagerPin(pin: string): SessionUser {
+  if (!pin) throw forbidden("A manager PIN is required for this action");
+  validatePin(pin);
+  const row = findEmployeeByPin(pin);
+  if (!row) throw forbidden("That manager PIN is not valid");
+  const manager = toSessionUser(row);
+  if (row.role_name !== "manager" && !can(manager.permissions, "admin.users")) {
+    throw forbidden("This action needs a General Manager's PIN");
+  }
+  return manager;
+}
+
 export interface EmployeeInput {
   name?: string;
   roleId?: string | null;
@@ -143,7 +178,7 @@ export function createEmployee(input: EmployeeInput, actor: SessionUser | null):
   const name = String(input.name ?? "").trim();
   if (!name) throw badRequest("Employee name is required");
   const pin = String(input.pin ?? "").trim();
-  validatePin(pin);
+  validatePin(pin, getSettings().pinLength);
   if (findEmployeeByPin(pin)) throw badRequest("That PIN is already assigned to another employee");
   if (input.roleId && !get("SELECT id FROM roles WHERE id = ?", input.roleId)) throw notFound("Role not found");
 
@@ -167,7 +202,7 @@ export function createEmployee(input: EmployeeInput, actor: SessionUser | null):
     input.hireDate ?? nowStamp().slice(0, 10),
     nowStamp(),
   );
-  audit(actor, "admin.employee.create", "employee", id, `${name} (${pin})`);
+  audit(actor, "admin.employee.create", "employee", id, name);
   return getStaffMember(id)!;
 }
 
@@ -175,7 +210,7 @@ export function updateEmployee(id: string, patch: EmployeeInput, actor: SessionU
   const row = get<EmployeeRow>("SELECT * FROM employees WHERE id = ?", id);
   if (!row) throw notFound("Employee not found");
   if (patch.pin !== undefined && patch.pin !== "") {
-    validatePin(patch.pin);
+    validatePin(patch.pin, getSettings().pinLength);
     const clash = all<EmployeeRow>("SELECT * FROM employees WHERE is_active = 1").find(
       (candidate) => candidate.id !== id && pinMatches(candidate.pin, patch.pin as string),
     );
@@ -225,10 +260,50 @@ export function getRoles(): RoleInfo[] {
   }));
 }
 
-/** Replace a role's individually granted permission set. */
+export function createRole(
+  input: { title: string; name?: string; hourlyRate?: number; permissions?: string[] },
+  actor: SessionUser | null,
+): RoleInfo {
+  const title = String(input.title ?? "").trim();
+  if (!title) throw badRequest("Role title is required");
+  const name = String(input.name ?? title)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
+  if (!name) throw badRequest("Role name is required");
+  if (get("SELECT id FROM roles WHERE name = ? OR title = ? COLLATE NOCASE", name, title)) {
+    throw badRequest("A role with that name already exists");
+  }
+  const id = uuid();
+  const valid = new Set(Object.keys(PERMISSIONS));
+  const permissions = [...new Set(input.permissions ?? [])].filter((permission) => valid.has(permission));
+  tx(() => {
+    const sortOrder = Number(get<{ next: number }>("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM roles")?.next ?? 0);
+    run(
+      "INSERT INTO roles (id, name, title, hourly_rate, is_system, sort_order) VALUES (?, ?, ?, ?, 0, ?)",
+      id,
+      name,
+      title,
+      Math.max(0, Math.round(input.hourlyRate ?? 0)),
+      sortOrder,
+    );
+    for (const permission of permissions) {
+      run("INSERT INTO role_permissions (role_id, permission) VALUES (?, ?)", id, permission);
+    }
+  });
+  audit(actor, "admin.role.create", "role", id, `${title}: ${permissions.length} permission(s)`);
+  return getRoles().find((entry) => entry.id === id)!;
+}
+
+/** Replace a role's complete permission set. */
 export function setRolePermissions(roleId: string, permissions: string[], actor: SessionUser | null): RoleInfo {
   const role = get<{ id: string; name: string }>("SELECT id, name FROM roles WHERE id = ?", roleId);
   if (!role) throw notFound("Role not found");
+  if (role.name === "manager" && (!permissions.includes("admin.users") || !permissions.includes("admin.settings"))) {
+    throw badRequest("General Manager must retain user and settings administration to prevent a lockout");
+  }
   const valid = new Set(Object.keys(PERMISSIONS));
   tx(() => {
     run("DELETE FROM role_permissions WHERE role_id = ?", roleId);

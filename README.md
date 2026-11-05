@@ -37,6 +37,9 @@ built-in development secret for a real deployment.
 - `/kds/grill`, `/expo`, and `/prep` — station boards, the pass, and prep sheets
 - `/admin/*` — menu, inventory, recipes, purchasing, waste, floor-plan editing,
   product mix, executive reporting, and Z-reports
+- `/admin/settings` — six-section configuration portal for store identity,
+  hours, service periods, taxes, gratuity, service-style presets, hardware,
+  RBAC, messaging, vendor EDI, and delivery-provider credentials
 - `/cfd` — read-only customer-facing display with a live ticket and payment QR;
   use `/cfd?terminal=term-pos-2` for the second register
 - `/t/[token]` — public QR table ordering, live kitchen status, and guest
@@ -46,13 +49,57 @@ The guest token grants access only to its assigned table's active QR ticket.
 The CFD and QR pages use relative API URLs, so they work behind a reverse proxy
 without hardcoding a browser-facing backend origin.
 
+### Configuration portal
+
+Settings are validated and saved atomically with an audit entry. Full-service,
+quick-service, and bar/nightclub presets change only workflow controls, never
+menu or financial history. KDS category routes are snapshotted onto new order
+lines, and the offline-payment switch and risk cap are enforced at checkout.
+Role-matrix changes take effect on the next authenticated API request.
+
+Printer discovery is a manager-initiated, bounded scan of one explicitly entered
+IPv4 `/24` on port 9100. Device checks establish a TCP connection only; they do
+not claim ESC/POS compatibility or EMV settlement. Live marketplace ingestion,
+SMS/email delivery, SFTP, and certified card processing still require the
+relevant provider onboarding and connector runtime.
+
+Integration secrets are masked in API responses and omitted from audit details.
+Non-empty deployment variables such as `RMS_TWILIO_AUTH_TOKEN` and
+`RMS_SENDGRID_API_KEY` override stored credentials without writing them to
+SQLite. Protect `.env`, the SQLite file, and backups, and use HTTPS.
+
+## Single-instance AWS deployment
+
+The repository includes a non-root production Dockerfile, single-container
+Compose configuration, Nginx/Certbot configuration, environment template, and
+consistent SQLite backup automation. Follow **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
+for the complete EC2, HTTPS, first-run setup, update, and restore procedure.
+
+Use a fresh production database. Production startup runs migrations but never
+seeds demo accounts or orders, and requires a stable random `RMS_SECRET_KEY`.
+An empty workspace is initialized once at `/setup` with `RMS_SETUP_TOKEN`, a
+restaurant profile, and a new hashed manager PIN. Blank the setup token after
+initialization and recreate the container.
+
+For a direct standalone run, keep secrets outside Next's build-time `.env`
+discovery and use `RMS_ENV_FILE=/secure/path/rms.env npm run start`. The start
+script prepares standalone assets and resolves `RMS_DATA_DIR` to an absolute
+path. The post-build/start cleanup removes any traced `data`, `backups`, or
+`.env*` files from standalone output. The backup wrapper accepts the same
+`RMS_ENV_FILE` variable.
+
+This baseline is one EC2 instance with local persistent storage and one SQLite
+writer. It does not provide certified card settlement, automatic restaurant-LAN
+access, high availability, or horizontal scaling. Migrate to PostgreSQL and
+redesign shared state before running multiple application instances.
+
 ## Verify
 
 ```bash
 npm run typecheck
 npm test
 npm run build
-npm run start
+RMS_ENV=demo npm run start   # explicit local demo mode
 ```
 
 The test suite covers domain arithmetic, state machines, permissions, seed
