@@ -3,84 +3,75 @@
  *
  * Staff sign in on the Shift PIN Pad; the server issues an HMAC-signed,
  * HTTP-only cookie plus a readable double-submit CSRF token. The signed payload
- * carries only the employee id — permissions are re-read from the database on
- * every request so revoking access takes effect immediately.
+ * carries the employee id and the restaurant (tenant) id — permissions are
+ * re-read from the database on every request so revoking access takes effect
+ * immediately.
+ *
+ * The cryptographic primitives live in `session-core.ts` (no Next.js imports);
+ * this module adds the request-scoped cookie helpers.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
-import { SESSION_COOKIE, CSRF_COOKIE } from "@/lib/session-keys";
+import {
+  CSRF_COOKIE,
+  PLATFORM_CSRF_COOKIE,
+  PLATFORM_SESSION_COOKIE,
+  SESSION_COOKIE,
+  TENANT_COOKIE,
+} from "@/lib/session-keys";
+import {
+  csrfHeaderMatches as coreCsrfHeaderMatches,
+  csrfMatches as coreCsrfMatches,
+  type CookieJar,
+  type VerifiedToken,
+  verifyToken as verifyTokenFromCore,
+} from "@/lib/session-core";
 
-export { SESSION_COOKIE, CSRF_COOKIE };
+export {
+  CSRF_COOKIE,
+  PLATFORM_CSRF_COOKIE,
+  PLATFORM_SESSION_COOKIE,
+  SESSION_COOKIE,
+  TENANT_COOKIE,
+};
+export {
+  isDemoMode,
+  isProduction,
+  issueToken,
+  newCsrfToken,
+  secret,
+  validateProductionEnvironment,
+  verifyToken,
+  type CookieJar,
+  type IssueTokenOptions,
+  type TokenScope,
+  type VerifiedToken,
+} from "@/lib/session-core";
 
-const DEFAULT_SECRET = "rms-development-secret-change-me-0123456789abcdef";
-
-/** Fail closed rather than issuing production sessions with the demo secret. */
-export function validateProductionEnvironment(): void {
-  if (!isProduction()) return;
-  const configured = process.env.RMS_SECRET_KEY ?? "";
-  if (configured.trim().length < 32 || configured === DEFAULT_SECRET) {
-    throw new Error("RMS_SECRET_KEY must be a stable random value of at least 32 characters in production");
-  }
+export interface StaffSession {
+  uid: string;
+  tenantId?: string;
 }
 
-function secret(): string {
-  validateProductionEnvironment();
-  return process.env.RMS_SECRET_KEY || DEFAULT_SECRET;
+/** Read + verify the staff session from a cookie jar (Next `cookies()` or a map). */
+export function readSession(jar: CookieJar): StaffSession | null {
+  const verified: VerifiedToken | null = verifyStaffToken(jar.get(SESSION_COOKIE)?.value);
+  return verified ? { uid: verified.uid, ...(verified.tid ? { tenantId: verified.tid } : {}) } : null;
 }
 
-export function isProduction(): boolean {
-  const explicitMode = process.env.RMS_ENV?.toLowerCase();
-  // An explicit RMS_ENV=demo supports reviewed demo/preview builds. Otherwise
-  // a conventional NODE_ENV=production start must never fall back to demo data.
-  return explicitMode ? explicitMode === "production" : process.env.NODE_ENV === "production";
+/** Read + verify the platform (super admin) session. */
+export function readPlatformSession(jar: CookieJar): { uid: string } | null {
+  const token = jar.get(PLATFORM_SESSION_COOKIE)?.value;
+  if (!token) return null;
+  const verified = verifyTokenFromCore(token);
+  if (!verified || verified.scope !== "platform") return null;
+  return { uid: verified.uid };
 }
 
-export function isDemoMode(): boolean {
-  return !isProduction();
-}
-
-function base64url(input: string | Buffer): string {
-  return Buffer.from(input).toString("base64url");
-}
-
-function sign(payload: string): string {
-  return createHmac("sha256", secret()).update(payload).digest("base64url");
-}
-
-export function issueToken(employeeId: string): string {
-  const payload = base64url(JSON.stringify({ uid: employeeId, iat: Date.now(), n: randomBytes(6).toString("hex") }));
-  return `${payload}.${sign(payload)}`;
-}
-
-export function verifyToken(token: string | undefined | null): { uid: string; iat: number } | null {
-  if (!token || !token.includes(".")) return null;
-  const [payload, signature] = token.split(".");
-  if (!payload || !signature) return null;
-  const expected = sign(payload);
-  const a = Buffer.from(expected);
-  const b = Buffer.from(signature);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
-  try {
-    const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { uid?: string; iat?: number };
-    if (!decoded.uid) return null;
-    return { uid: decoded.uid, iat: decoded.iat ?? 0 };
-  } catch {
-    return null;
-  }
-}
-
-export function newCsrfToken(): string {
-  return randomBytes(24).toString("base64url");
-}
-
-export interface CookieJar {
-  get(name: string): { value: string } | undefined;
-}
-
-/** Read + verify the session from a cookie jar (Next `cookies()` or a plain map). */
-export function readSession(jar: CookieJar): { uid: string } | null {
-  const verified = verifyToken(jar.get(SESSION_COOKIE)?.value);
-  return verified ? { uid: verified.uid } : null;
+function verifyStaffToken(token: string | undefined | null): VerifiedToken | null {
+  if (!token) return null;
+  const verified = verifyTokenFromCore(token);
+  if (!verified || verified.scope !== "staff") return null;
+  return verified;
 }
 
 /** Server-component helper: current employee id, or null when signed out. */
@@ -89,19 +80,20 @@ export async function currentEmployeeId(): Promise<string | null> {
   return readSession({ get: (name) => jar.get(name) })?.uid ?? null;
 }
 
-export function csrfMatches(jar: CookieJar, supplied: string | null): boolean {
-  const expected = jar.get(CSRF_COOKIE)?.value ?? "";
-  if (!expected || !supplied) return false;
-  const a = Buffer.from(expected);
-  const b = Buffer.from(supplied);
-  return a.length === b.length && timingSafeEqual(a, b);
+/** Server-component helper: the signed tenant id for the current request. */
+export async function currentTenantId(): Promise<string | null> {
+  const jar = await cookies();
+  return readSession({ get: (name) => jar.get(name) })?.tenantId ?? null;
 }
 
-/**
- * Validate the double-submit header without ever falling back to Cookie.
- * A browser attaches cookies to cross-site requests automatically, so parsing
- * the token out of that same header would provide no CSRF protection at all.
- */
+export function csrfMatches(jar: CookieJar, supplied: string | null): boolean {
+  return coreCsrfMatches(jar, supplied, CSRF_COOKIE);
+}
+
 export function csrfHeaderMatches(jar: CookieJar, headers: Pick<Headers, "get">): boolean {
-  return csrfMatches(jar, headers.get("x-csrf-token"));
+  return coreCsrfHeaderMatches(jar, headers, CSRF_COOKIE);
+}
+
+export function platformCsrfHeaderMatches(jar: CookieJar, headers: Pick<Headers, "get">): boolean {
+  return coreCsrfHeaderMatches(jar, headers, PLATFORM_CSRF_COOKIE, "x-platform-csrf-token");
 }

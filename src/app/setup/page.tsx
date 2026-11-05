@@ -136,6 +136,11 @@ export default function ProductionSetupPage() {
               </div>
             )}
           </div>
+          <div className="mt-3 rounded-xl border border-brand-200 bg-brand-50 px-3 py-2.5 text-[11px] leading-relaxed text-brand-800">
+            <strong>Running more than one restaurant?</strong> Use the{" "}
+            <Link href="/platform" className="font-bold underline">platform console</Link> instead. A platform owner
+            creates each restaurant account and its administrator PIN; this page initializes one single-store install.
+          </div>
           <p className="mt-4 text-center text-[11px] text-ink-faint">Already configured? <Link href="/login" className="font-bold text-brand-700 hover:underline">Return to staff sign in</Link></p>
         </div>
       </section>

@@ -7,9 +7,10 @@
  * The toggle makes the intent explicit, because a manager tapping in to check a
  * report should not silently start an eight-hour shift.
  *
- * PINs are 4 or 6 digits. Four digits submit immediately only when no six-digit
- * PIN shares the prefix — otherwise the pad waits, so a 4-digit PIN cannot be
- * shadowed by a longer one.
+ * PINs are 4 or 6 digits and are unique only *within* a restaurant, so the pad
+ * first binds the browser to a restaurant code. That code is what selects the
+ * tenant database; the signed session then carries it for every later request.
+ * A single-restaurant deployment can skip the picker entirely.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -31,22 +32,51 @@ export default function LoginPage() {
   const [shake, setShake] = useState(false);
   const [hints, setHints] = useState<StaffMember[]>([]);
   const [sessionInfo, setSessionInfo] = useState<{ demoMode: boolean; setupRequired: boolean } | null>(null);
+  const [tenantCode, setTenantCode] = useState("");
+  const [directory, setDirectory] = useState<{ code: string; name: string; tagline: string }[]>([]);
+  const [singleTenant, setSingleTenant] = useState<{ code: string; name: string; tagline: string } | null>(null);
   const submitLock = useRef(false);
 
   const demoMode = state?.demoMode ?? sessionInfo?.demoMode ?? true;
+  const activeTenant = singleTenant ?? directory.find((entry) => entry.code === tenantCode) ?? null;
 
   useEffect(() => {
-    api.get<{ demoMode: boolean; setupRequired: boolean }>("session").then(setSessionInfo).catch(() => setSessionInfo(null));
+    api
+      .get<{ demoMode: boolean; setupRequired: boolean; restaurantDirectory: boolean }>("session")
+      .then(setSessionInfo)
+      .catch(() => setSessionInfo(null));
+
+    api
+      .get<{ tenants: { code: string; name: string; tagline: string }[]; single: { code: string; name: string; tagline: string } | null }>(
+        "session/tenants",
+      )
+      .then((result) => {
+        setDirectory(result.tenants);
+        setSingleTenant(result.single && result.tenants.length <= 1 ? result.single : null);
+        const remembered =
+          window.localStorage.getItem("rms.tenant") ||
+          new URLSearchParams(window.location.search).get("restaurant") ||
+          "";
+        const valid = result.tenants.find((entry) => entry.code === remembered);
+        setTenantCode(valid?.code ?? result.single?.code ?? result.tenants[0]?.code ?? remembered);
+      })
+      .catch(() => {
+        setDirectory([]);
+      });
   }, []);
 
-  // Demo PIN hints. The plain PIN only ever leaves the server in demo mode.
+  // Demo PIN hints. The plain PIN only ever leaves the server in demo mode, and
+  // only for the restaurant currently selected on this pad.
   useEffect(() => {
-    if (!demoMode) return;
+    if (!demoMode || !tenantCode) {
+      setHints([]);
+      return;
+    }
     api
-      .get<{ staff: StaffMember[] }>("staff")
-      .then((result) => setHints(result.staff.filter((member) => member.pin).slice(0, 8)))
+      .get<{ staff: StaffMember[] }>(`session/demo-pins?restaurant=${encodeURIComponent(tenantCode)}`)
+      .then((result) => setHints(result.staff.slice(0, 8)))
       .catch(() => setHints([]));
-  }, [demoMode]);
+  }, [demoMode, tenantCode]);
 
   const submit = useCallback(
     async (value: string) => {
@@ -55,7 +85,7 @@ export default function LoginPage() {
       setBusy(true);
       setError(null);
       try {
-        const user = await signIn(value, clockIn);
+        const user = await signIn(value, clockIn, tenantCode || undefined);
         toast(`Welcome, ${user.name.split(" ")[0]}${clockIn ? " — clocked in" : ""}`, "ok");
         const landing = await pickLanding();
         router.replace(landing);
@@ -71,7 +101,7 @@ export default function LoginPage() {
         submitLock.current = false;
       }
     },
-    [signIn, clockIn, router],
+    [signIn, clockIn, tenantCode, router],
   );
 
   // Route by permission, the same way the server-side index does.
@@ -196,6 +226,60 @@ export default function LoginPage() {
       {/* -------------------------------------------------------------- right: pad */}
       <div className="flex flex-1 items-center justify-center bg-paper px-4 py-8 lg:px-10">
         <div className="w-full max-w-sm">
+          <div className="card mb-3 px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-[0.09em] text-ink-faint">Restaurant</p>
+                <p className="truncate text-sm font-extrabold text-ink">
+                  {activeTenant ? activeTenant.name : tenantCode || "Select your restaurant"}
+                </p>
+                <p className="truncate text-[11px] text-ink-faint">
+                  {activeTenant?.tagline || "PINs are unique within one restaurant"}
+                </p>
+              </div>
+              <span className="rounded-lg bg-paper-sunken px-2 py-1 font-mono text-[11px] font-bold text-ink-soft">
+                {tenantCode || "—"}
+              </span>
+            </div>
+
+            {singleTenant ? null : directory.length > 0 ? (
+              <label className="mt-2 block">
+                <span className="sr-only">Restaurant code</span>
+                <select
+                  className="field !py-2 text-[13px] font-semibold"
+                  value={tenantCode}
+                  onChange={(event) => {
+                    setTenantCode(event.target.value);
+                    setPin("");
+                    window.localStorage.setItem("rms.tenant", event.target.value);
+                  }}
+                  disabled={busy}
+                >
+                  {directory.map((entry) => (
+                    <option key={entry.code} value={entry.code}>
+                      {entry.name} — {entry.code}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label className="mt-2 block">
+                <span className="sr-only">Restaurant code</span>
+                <input
+                  className="field !py-2 font-mono text-[13px]"
+                  value={tenantCode}
+                  onChange={(event) => {
+                    setTenantCode(event.target.value.trim().toLowerCase());
+                    window.localStorage.setItem("rms.tenant", event.target.value.trim().toLowerCase());
+                  }}
+                  placeholder="e.g. terai-kitchen"
+                  autoComplete="off"
+                  disabled={busy}
+                />
+              </label>
+            )}
+          </div>
+
           <div className={`card card-pad ${shake ? "animate-[shake_0.42s_ease]" : ""}`}>
             <style>{`@keyframes shake {
               0%,100% { transform: translateX(0) }
@@ -267,7 +351,7 @@ export default function LoginPage() {
             <button
               type="button"
               className="btn btn-primary mt-3 w-full !py-3 !text-base"
-              disabled={busy || pin.length < 4}
+              disabled={busy || pin.length < 4 || !tenantCode}
               onClick={() => void submit(pin)}
             >
               {busy ? "Signing in…" : loading ? "Loading…" : "Sign in"}
@@ -276,11 +360,15 @@ export default function LoginPage() {
 
           {sessionInfo?.setupRequired && (
             <div className="card card-pad mt-3 border-brand-200 bg-brand-50">
-              <p className="flex items-center gap-2 text-[12px] font-extrabold text-brand-800"><Icon name="lock" className="size-4" />First-run setup required</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-brand-700">This production database has no staff yet. Use the deployment setup token to create the initial manager.</p>
-              <Link href="/setup" className="btn btn-primary mt-3 w-full">Initialize restaurant<Icon name="arrow-right" className="size-4" /></Link>
+              <p className="flex items-center gap-2 text-[12px] font-extrabold text-brand-800"><Icon name="lock" className="size-4" />Platform setup required</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-brand-700">No super admin exists yet. Create the platform account and your first restaurant in the platform console.</p>
+              <Link href="/platform" className="btn btn-primary mt-3 w-full">Open platform console<Icon name="arrow-right" className="size-4" /></Link>
             </div>
           )}
+
+          <p className="mt-3 text-center text-[11px] text-ink-faint">
+            Platform operator? <Link href="/platform" className="font-bold text-brand-700 hover:underline">Super admin console</Link>
+          </p>
 
           {demoMode && hints.length > 0 && (
             <div className="card card-pad mt-3">

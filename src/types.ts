@@ -824,10 +824,20 @@ export interface AuditEntry {
   createdAt: string;
 }
 
+/** The restaurant (tenant) a session is bound to. */
+export interface TenantIdentity {
+  id: string;
+  code: string;
+  name: string;
+  tagline: string;
+}
+
 export interface BootstrapState {
   user: SessionUser;
   demoMode: boolean;
   csrfToken: string | null;
+  /** Null only for the legacy single-store deployment path. */
+  tenant: TenantIdentity | null;
   restaurant: { name: string; tagline: string; address: string; phone: string; panVat: string };
   settings: Settings;
   stations: StationInfo[];

@@ -17,11 +17,12 @@ elif [[ -f .env ]]; then
 fi
 
 backup_file="$(node --experimental-strip-types --no-warnings scripts/backup-sqlite.ts)"
-echo "Created verified SQLite backup: $backup_file"
+echo "Created verified SQLite backup directory: $backup_file"
 
 # Authenticate with the EC2 instance role, not long-lived keys in .env.
 # Configure S3 bucket retention/lifecycle separately from local retention.
 if [[ -n "${RMS_BACKUP_S3_URI:-}" ]]; then
-  aws s3 cp "$backup_file" "${RMS_BACKUP_S3_URI%/}/" --sse AES256 --only-show-errors
-  echo "Copied backup to ${RMS_BACKUP_S3_URI%/}/"
+  # Recursive: the directory holds control.db plus one database per restaurant.
+  aws s3 cp "$backup_file" "${RMS_BACKUP_S3_URI%/}/$(basename "$backup_file")/" --recursive --sse AES256 --only-show-errors
+  echo "Copied backup to ${RMS_BACKUP_S3_URI%/}/$(basename "$backup_file")/"
 fi
