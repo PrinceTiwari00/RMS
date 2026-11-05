@@ -8,9 +8,9 @@
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
+import { SESSION_COOKIE, CSRF_COOKIE } from "@/lib/session-keys";
 
-export const SESSION_COOKIE = "rms_session";
-export const CSRF_COOKIE = "rms_csrf";
+export { SESSION_COOKIE, CSRF_COOKIE };
 
 const DEFAULT_SECRET = "rms-development-secret-change-me-0123456789abcdef";
 

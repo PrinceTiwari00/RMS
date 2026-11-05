@@ -5,7 +5,7 @@
  * hardcoded `localhost` origin would break. Mutating calls carry the
  * double-submit CSRF token read from the non-httpOnly cookie.
  */
-import { CSRF_COOKIE } from "@/lib/session";
+import { CSRF_COOKIE } from "@/lib/session-keys";
 
 export class ApiError extends Error {
   status: number;
