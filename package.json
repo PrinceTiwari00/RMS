@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "db:reset": "vite-node scripts/reset-db.ts",
     "db:seed": "vite-node scripts/seed.ts",
-    "db:backup": "node --experimental-strip-types --no-warnings scripts/backup-sqlite.ts"
+    "db:backup": "node --experimental-strip-types --no-warnings scripts/backup-sqlite.ts",
+    "tenant:create": "vite-node scripts/create-restaurant.ts"
   },
   "dependencies": {
     "next": "15.5.29",

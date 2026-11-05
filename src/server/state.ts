@@ -18,8 +18,10 @@ import { purchasingSummary } from "@/server/purchasing";
 import { getBusinessDay } from "@/server/reports";
 import { getStaff } from "@/server/staff";
 import { isDemoMode } from "@/lib/session";
+import { currentTenantScope } from "@/db/client";
+import { getTenantById } from "@/server/tenant";
 import { businessDateNow, nowStamp, today } from "@/domain/time";
-import type { BootstrapState, Metrics, SessionUser } from "@/types";
+import type { BootstrapState, Metrics, SessionUser, TenantIdentity } from "@/types";
 
 /** Headline numbers for the dashboard strip. Cheap enough to poll every few seconds. */
 export function buildMetrics(): Metrics {
@@ -86,12 +88,21 @@ export function buildMetrics(): Metrics {
   };
 }
 
+export function currentTenantIdentity(): TenantIdentity | null {
+  const scope = currentTenantScope();
+  if (!scope) return null;
+  const tenant = getTenantById(scope.tenantId);
+  if (!tenant) return null;
+  return { id: tenant.id, code: tenant.code, name: tenant.name, tagline: tenant.tagline };
+}
+
 export function buildBootstrap(user: SessionUser | null, csrfToken: string | null): BootstrapState {
   const settings = getSettings();
   return {
     user: user ?? { id: "", name: "Signed out", initials: "—", color: "#8a94a0", role: "guest", roleTitle: "Signed out", permissions: [] },
     demoMode: isDemoMode(),
     csrfToken,
+    tenant: currentTenantIdentity(),
     restaurant: {
       name: settings.restaurantName,
       tagline: settings.tagline,

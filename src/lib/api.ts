@@ -25,6 +25,19 @@ function readCsrf(): string {
   return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : "";
 }
 
+/**
+ * Carry the restaurant from the browser URL into the API call.
+ *
+ * A customer display or guest page on a shared deployment is opened directly
+ * (`/cfd?tenant=himalayan-grill`) with no staff session. Forwarding that query
+ * parameter lets the server bind the request to the right restaurant and set
+ * the tenant cookie, so the next poll needs nothing extra.
+ */
+function tenantParamFromLocation(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("tenant");
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   let payload: string | undefined;
@@ -37,7 +50,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     if (csrf) headers["x-csrf-token"] = csrf;
   }
 
-  const response = await fetch(`/api/${path.replace(/^\/+/, "")}`, {
+  let url = `/api/${path.replace(/^\/+/, "")}`;
+  const tenant = tenantParamFromLocation();
+  if (tenant && !/[?&]tenant=/.test(url)) {
+    url += `${url.includes("?") ? "&" : "?"}tenant=${encodeURIComponent(tenant)}`;
+  }
+
+  const response = await fetch(url, {
     method,
     headers,
     body: payload,

@@ -10,6 +10,7 @@
  * Import order between modules is not significant — no two modules claim the
  * same method + segment shape.
  */
+import "./platform";
 import "./session";
 import "./menu";
 import "./floor";

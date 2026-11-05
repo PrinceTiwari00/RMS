@@ -32,7 +32,7 @@ interface StoreValue {
   /** Permission check that is safe before the bootstrap resolves. */
   allowed: (permission: Permission) => boolean;
   refresh: () => Promise<void>;
-  signIn: (pin: string, clockIn: boolean) => Promise<SessionUser>;
+  signIn: (pin: string, clockIn: boolean, restaurant?: string) => Promise<SessionUser>;
   signOut: () => Promise<void>;
 }
 
@@ -61,8 +61,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const signIn = useCallback(
-    async (pin: string, clockIn: boolean) => {
-      const result = await api.post<{ user: SessionUser }>("session/signin", { pin, clockIn });
+    async (pin: string, clockIn: boolean, restaurant?: string) => {
+      const result = await api.post<{ user: SessionUser }>("session/signin", { pin, clockIn, restaurant });
       await refresh();
       return result.user;
     },

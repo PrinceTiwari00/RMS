@@ -44,7 +44,12 @@ Edit `.env`:
   every session. Never reuse the development fallback or commit this value.
 - `RMS_SETUP_TOKEN`: a different random, one-time deployment secret. It is pasted
   into the browser only during initial setup; it is never included in a URL.
-- `RMS_DATA_DIR`: normally `./data`, mounted at `/data` in the container.
+- `RMS_DATA_DIR`: normally `./data`, mounted at `/data` in the container. It holds
+  `control.db` (platform accounts and the restaurant registry), the legacy
+  single-store `rms.db`, and one database per restaurant under `tenants/<code>/`.
+  All of them must be backed up and restored together.
+- Optional: `RMS_PLATFORM_EMAIL` / `RMS_PLATFORM_PASSWORD` to create the first
+  super-admin account at boot instead of through the browser setup token.
 
 Start with a **new empty production data directory**. Production migration never
 seeds demo staff, menu items, orders, or PINs. An existing demo database is not
@@ -103,7 +108,28 @@ curl -I https://rms.example.com/api/session
 If using a host firewall, allow OpenSSH (restricted), Nginx Full, and deny other
 inbound traffic. Port 3000 is bound only to `127.0.0.1` by Compose.
 
-## 4. One-time restaurant setup
+## 4. One-time first-run setup
+
+### 4a. Platform mode (recommended for more than one restaurant)
+
+1. Open `https://rms.example.com/platform` in a private browser session.
+2. Create the **platform owner**: name, email, a password of at least 10
+   characters, and the `RMS_SETUP_TOKEN` from `.env`. This account is a super
+   admin, not a restaurant login, and holds no restaurant permissions.
+3. In the console, choose **New restaurant**. Enter the restaurant name, its
+   sign-in code, the owner's name and a 4- or 6-digit admin PIN, and optionally a
+   contact email and plan.
+4. The server provisions an isolated database at
+   `data/tenants/<code>/rms.db`, installs the role matrix, station list, store
+   identity and the restaurant administrator, then shows the sign-in link, the
+   restaurant code and the PIN **once**.
+5. Hand those three values to the restaurant owner. They sign in at `/login`,
+   pick the restaurant code, and manage their own menu, floor, staff, inventory
+   and reports. Use **Suspend** in the console to block sign-in immediately.
+
+Restaurants can also be created non-interactively — see `docs/MULTI_TENANT.md`.
+
+### 4b. Single-store mode (legacy `/setup`)
 
 1. Open `https://rms.example.com/setup` in a private browser session.
 2. Enter the restaurant name, the first General Manager's name, a unique 4- or
@@ -149,10 +175,15 @@ restart interruption.
 
 ## 6. Consistent backups and restore
 
-`scripts/backup-sqlite.ts` uses SQLite's online `VACUUM INTO` snapshot, fsyncs
-the completed file, verifies its integrity, applies local retention, and never copies a live
-WAL database naively. The wrapper can upload the result to S3 with server-side
-encryption using the instance role.
+`scripts/backup-sqlite.ts` snapshots **every** database — `control.db`, the legacy
+`rms.db` if present, and each `tenants/<code>/rms.db` — into one timestamped
+directory, using SQLite's online `VACUUM INTO`, an fsync of each completed file,
+an integrity check, and a `manifest.json` that lists what was captured. Local
+retention applies to whole directories. The wrapper uploads the directory
+recursively to S3 with server-side encryption using the instance role.
+
+Never restore a partial directory: a registry row in `control.db` points at one
+specific `tenants/<code>/rms.db`.
 
 Test it manually, then install the daily cron entry (default 03:17 host time):
 
@@ -169,19 +200,23 @@ Block public access, enable default encryption, versioning, and a lifecycle rule
 on the bucket. Restrict the instance role to the backup prefix. EBS snapshots are
 an additional layer, not a replacement for testing application-level restores.
 
-Restore during a service window (use the actual timestamped filename):
+Restore during a service window (use the actual timestamped directory):
 
 ```bash
 cd /opt/rms
 docker compose stop rms
-cp -a data/rms.db "data/rms.db.before-restore-$(date +%s)"
-rm -f data/rms.db data/rms.db-shm data/rms.db-wal
-cp backups/rms-YYYY-MM-DDTHH-MM-SS.db data/rms.db
-sudo chown 1000:1000 data/rms.db
-chmod 600 data/rms.db
+mv data "data.before-restore-$(date +%s)"      # keep the old set intact
+cp -a backups/rms-YYYY-MM-DDTHH-MM-SS data
+rm -f data/*.db-wal data/*.db-shm data/tenants/*/*.db-wal data/tenants/*/*.db-shm
+sudo chown -R 1000:1000 data
+chmod -R go-rwx data
 docker compose start rms
 curl -fsS http://127.0.0.1:3000/api/session
 ```
+
+The backup directory contains `control.db`, `manifest.json` and `tenants/…`, so
+the platform accounts, the registry and every restaurant's data stay consistent
+with each other.
 
 Verify login, current settings, and recent orders. Practice this procedure on a
 separate instance before relying on it.

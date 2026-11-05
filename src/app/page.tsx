@@ -1,9 +1,8 @@
 import { redirect } from "next/navigation";
 import { ensureDatabase } from "@/db/boot";
-import { currentEmployeeId } from "@/lib/session";
-import { loadUser } from "@/server/identity";
 import { can } from "@/domain/permissions";
-import { productionSetupStatus } from "@/server/bootstrap";
+import { platformSetupRequired } from "@/server/platform";
+import { currentStaffContext } from "@/server/request-tenant";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +16,14 @@ export const dynamic = "force-dynamic";
  */
 export default async function IndexPage() {
   ensureDatabase();
-  if (productionSetupStatus().required) redirect("/setup");
-  const employeeId = await currentEmployeeId();
-  const user = employeeId ? loadUser(employeeId) : null;
-  if (!user) redirect("/login");
+  const context = await currentStaffContext();
+  if (!context) {
+    // No staff session: the very first visitor on a new deployment belongs in
+    // the platform console, because that is where restaurants are created.
+    if (platformSetupRequired()) redirect("/platform");
+    redirect("/login");
+  }
+  const user = context.user;
 
   const landing: { href: string; permission: Parameters<typeof can>[1] | null }[] = [
     { href: "/pos", permission: "pos.open" },

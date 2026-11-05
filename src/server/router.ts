@@ -7,22 +7,11 @@
  */
 import { NextResponse } from "next/server";
 import { can, type Permission } from "@/domain/permissions";
+import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from "@/server/errors";
+import type { PlatformUser } from "@/server/platform";
 import type { SessionUser } from "./identity";
 
-export class ApiError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-    this.name = "ApiError";
-  }
-}
-
-export const badRequest = (message: string) => new ApiError(400, message);
-export const unauthorized = (message = "Sign in to continue") => new ApiError(401, message);
-export const forbidden = (message = "You do not have permission to do that") => new ApiError(403, message);
-export const notFound = (message = "Not found") => new ApiError(404, message);
-export const conflict = (message: string) => new ApiError(409, message);
+export { ApiError, badRequest, conflict, forbidden, notFound, unauthorized };
 
 export interface RouteContext {
   params: Record<string, string>;
@@ -65,7 +54,11 @@ export function publicRoute(method: string, pattern: string, handler: Handler): 
   routes.push({ method: method.toUpperCase(), segments: compile(pattern), permission: null, isPublic: true, handler });
 }
 
-function match(route: Route, method: string, segments: string[]): Record<string, string> | null {
+function match(
+  route: { method: string; segments: string[] },
+  method: string,
+  segments: string[],
+): Record<string, string> | null {
   if (route.method !== method.toUpperCase()) return null;
   if (route.segments.length !== segments.length) return null;
   const params: Record<string, string> = {};
@@ -161,6 +154,89 @@ export function errorResponse(error: unknown): NextResponse {
   }
   console.error("[rms] unhandled API error", error);
   return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+}
+
+// ------------------------------------------------------------- platform routes
+// The super admin lives in a different authority domain: a platform session is
+// not a staff session and never carries a restaurant permission. These routes
+// therefore have their own tiny registry and auth check instead of pretending to
+// be staff endpoints with an empty permission.
+
+export interface PlatformRouteContext {
+  params: Record<string, string>;
+  query: URLSearchParams;
+  body: Record<string, unknown>;
+  /** Null only on the public platform endpoints (status, setup, sign-in). */
+  admin: PlatformUser | null;
+}
+
+export type PlatformHandler = (context: PlatformRouteContext) => unknown | Promise<unknown>;
+
+interface PlatformRoute {
+  method: string;
+  segments: string[];
+  requiresAuth: boolean;
+  handler: PlatformHandler;
+}
+
+const platformRoutes: PlatformRoute[] = [];
+
+export function platformRoute(
+  method: string,
+  pattern: string,
+  handler: PlatformHandler,
+  options: { requiresAuth?: boolean } = {},
+): void {
+  platformRoutes.push({
+    method: method.toUpperCase(),
+    segments: compile(pattern),
+    requiresAuth: options.requiresAuth ?? true,
+    handler,
+  });
+}
+
+export interface PlatformDispatchInput {
+  method: string;
+  segments: string[];
+  query: URLSearchParams;
+  body: Record<string, unknown>;
+  admin: PlatformUser | null;
+}
+
+export async function dispatchPlatform(input: PlatformDispatchInput): Promise<DispatchResult> {
+  for (const candidate of platformRoutes) {
+    const params = match(candidate, input.method, input.segments);
+    if (!params) continue;
+
+    if (candidate.requiresAuth && !input.admin) {
+      return {
+        kind: "handled",
+        response: NextResponse.json({ error: "Platform sign-in required" }, { status: 401 }),
+      };
+    }
+
+    try {
+      const result = await candidate.handler({
+        params,
+        query: input.query,
+        body: input.body,
+        admin: input.admin,
+      });
+      if (result instanceof NextResponse) return { kind: "handled", response: result };
+      return { kind: "handled", response: NextResponse.json(result ?? { ok: true }, { status: 200 }) };
+    } catch (error) {
+      return { kind: "handled", response: errorResponse(error) };
+    }
+  }
+  return { kind: "no-match" };
+}
+
+export function platformRouteTable(): { method: string; pattern: string; requiresAuth: boolean }[] {
+  return platformRoutes.map((entry) => ({
+    method: entry.method,
+    pattern: `/platform/${entry.segments.join("/")}`,
+    requiresAuth: entry.requiresAuth,
+  }));
 }
 
 export function routeTable(): { method: string; pattern: string; permission: string | null; isPublic: boolean }[] {

@@ -300,6 +300,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span className="hidden text-[11px] font-bold uppercase tracking-[0.08em] text-ink-faint sm:inline">
               {today()}
             </span>
+            {state.tenant && (
+              <Chip tone="neutral">
+                <span className="font-mono text-[10px]">{state.tenant.code}</span>
+              </Chip>
+            )}
             <Chip tone={metrics.openOrders + metrics.sentOrders > 0 ? "brand" : "neutral"} dot>
               {metrics.openOrders + metrics.sentOrders} open ticket{metrics.openOrders + metrics.sentOrders === 1 ? "" : "s"}
             </Chip>

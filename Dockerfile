@@ -18,8 +18,10 @@ ENV NODE_ENV=production \
 
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
-# node:sqlite schema is loaded at runtime, not bundled into server.js.
+# node:sqlite schemas are loaded at runtime, not bundled into server.js. Both the
+# per-restaurant schema and the control-plane schema must be present.
 COPY --from=build --chown=node:node /app/src/db/schema.sql ./src/db/schema.sql
+COPY --from=build --chown=node:node /app/src/db/control-schema.sql ./src/db/control-schema.sql
 
 RUN mkdir -p /data && chown node:node /data
 USER node
