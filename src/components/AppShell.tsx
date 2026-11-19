@@ -121,7 +121,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   // Bounce to the PIN pad if the session died underneath us.
   useEffect(() => {
-    if (!loading && state && !state.user.id) router.replace("/login");
+    if (!loading && !state?.user.id) router.replace("/login");
   }, [loading, state, router]);
 
   // Close the mobile drawer on navigation.

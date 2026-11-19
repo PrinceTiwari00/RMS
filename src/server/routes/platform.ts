@@ -44,6 +44,7 @@ import {
   PLATFORM_CSRF_COOKIE,
   PLATFORM_SESSION_COOKIE,
   isProduction,
+  isDemoMode,
   issueToken,
   newCsrfToken,
 } from "@/lib/session";
@@ -63,7 +64,7 @@ function issuePlatformSession(user: PlatformUser): NextResponse {
   const response = NextResponse.json({
     user,
     csrfToken: csrf,
-    demoMode: !isProduction(),
+    demoMode: isDemoMode(),
   });
   response.cookies.set(PLATFORM_SESSION_COOKIE, token, { ...COOKIE_BASE, maxAge: PLATFORM_SESSION_MAX_AGE });
   response.cookies.set(PLATFORM_CSRF_COOKIE, csrf, {
@@ -105,7 +106,7 @@ platformRoute(
   ({ admin }) => ({
     user: admin,
     ...platformSetupStatus(),
-    demoCredentials: !isProduction() ? { email: DEMO_PLATFORM_EMAIL, password: DEMO_PLATFORM_PASSWORD } : null,
+    demoCredentials: isDemoMode() ? { email: DEMO_PLATFORM_EMAIL, password: DEMO_PLATFORM_PASSWORD } : null,
   }),
   { requiresAuth: false },
 );
@@ -167,7 +168,7 @@ platformRoute("POST", "signout", ({ admin }) => {
 
 platformRoute("GET", "tenants", () => ({
   tenants: listTenants({ includeSuspended: true }).map(publicTenant),
-  demoMode: !isProduction(),
+  demoMode: isDemoMode(),
 }));
 
 platformRoute("GET", "tenants/:id", ({ params }) => {
@@ -290,7 +291,7 @@ platformRoute("GET", "me", ({ admin }) => {
 platformRoute("GET", "settings", () => ({
   tenantDirectory: tenantDirectoryEnabled(),
   production: isProduction(),
-  demoMode: !isProduction(),
+  demoMode: isDemoMode(),
   setup: { required: platformSetupStatus().required, tokenConfigured: platformSetupStatus().tokenConfigured },
   flags: { publicDirectory: tenantDirectoryEnabled(), envProvisioned: platformSetupStatus().envProvisioned },
 }));

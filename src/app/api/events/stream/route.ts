@@ -39,6 +39,8 @@ export async function GET(request: NextRequest) {
   }
   const tenant = resolution.tenant;
 
+  if (tenant.status !== "active") return NextResponse.json({ error: "Restaurant is suspended" }, { status: 403 });
+
   let guestTableId: string | null = null;
   if (token) {
     try {
@@ -73,9 +75,9 @@ export async function GET(request: NextRequest) {
       send("connected", { ok: true, tenantId: tenant.id, ts: Date.now() });
 
       const unsub = subscribeTenantEvents(tenant.id, (evt: RmsEvent) => {
-        if (guestTableId) {
+        if (token) {
           // Guests receive events for their own table, plus live quiz updates.
-          const isOwnTable = !evt.tableId || evt.tableId === guestTableId;
+          const isOwnTable = Boolean(guestTableId && evt.tableId === guestTableId);
           const isQuiz = evt.type === "quiz.updated";
           if (!isOwnTable && !isQuiz) return;
         } else if (stationFilter && stationFilter !== "all" && evt.type === "kds.updated" && evt.station && evt.station !== stationFilter) {

@@ -74,7 +74,7 @@ function tenantCookie(tenant: Tenant, jar: CookieJar): { name: string; value: st
 
 async function handle(request: NextRequest, context: RouteContext): Promise<NextResponse> {
   const resolved = await context.params;
-  const segments = (resolved?.path ?? []).filter(Boolean).map(decodeURIComponent);
+  const segments = (resolved?.path ?? []).filter(Boolean);
   const method = request.method.toUpperCase();
   const jar: CookieJar = { get: (name) => request.cookies.get(name) };
   const ip = clientIp(request);

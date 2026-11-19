@@ -12,13 +12,8 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const productionMode = process.env.RMS_ENV
-  ? process.env.RMS_ENV.toLowerCase() === "production"
-  : process.env.NODE_ENV === "production";
-if (productionMode && process.env.RMS_ALLOW_DEMO_SEED !== "1") {
-  throw new Error(
-    "Refusing to install demo accounts in production. Create the platform owner from /platform and restaurants from the console.",
-  );
+if (process.env.RMS_ENV?.toLowerCase() !== "demo" || process.env.NODE_ENV === "production") {
+  throw new Error("Demo seeding requires RMS_ENV=demo and a non-production Node environment. Use /platform for real restaurants.");
 }
 
 const here = dirname(fileURLToPath(import.meta.url));

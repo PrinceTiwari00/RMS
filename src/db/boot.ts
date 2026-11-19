@@ -14,10 +14,10 @@
  * The legacy single-store database is still migrated so a production install can
  * use the original `/setup` flow without any platform account.
  */
-import { db, migrate, migrateControl } from "@/db/client";
+import { db, get, controlGet, migrate, migrateControl, withTenant } from "@/db/client";
 import { ensurePlatformBootstrap } from "@/server/platform";
-import { ensureDemoTenant } from "@/server/tenant";
-import { isProduction, validateProductionEnvironment } from "@/lib/session";
+import { ensureDemoTenant, listTenants, tenantScope } from "@/server/tenant";
+import { isDemoMode, isProduction, validateProductionEnvironment } from "@/lib/session";
 
 let ready = false;
 
@@ -31,8 +31,17 @@ export function ensureDatabase(): void {
   migrate();
   // Demo identities are opt-in development data, never a production recovery
   // mechanism. Production restaurants are created by a platform admin.
-  if (!isProduction()) {
+  if (isDemoMode()) {
     ensureDemoTenant();
+  }
+  if (isProduction()) {
+    // Refuse a reused demo volume instead of silently exposing known accounts.
+    // Never automatically delete databases: an operator must preserve real records.
+    const demoOwner = controlGet("SELECT id FROM platform_users WHERE email = ? AND is_active = 1", "owner@rms.local");
+    const hasDemoData = () => Boolean(get("SELECT value FROM settings WHERE key = 'seed_version' AND value LIKE 'rms-demo%'") );
+    if (demoOwner || hasDemoData() || listTenants().some((tenant) => withTenant(tenantScope(tenant), hasDemoData))) {
+      throw new Error("Demo data detected. Back up this volume and provision a clean production data directory before serving clients.");
+    }
   }
   // Touch the handle so a permissions or path problem fails during boot rather
   // than halfway through the first query.

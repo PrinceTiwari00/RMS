@@ -412,6 +412,9 @@ export function payGuestOrder(
   emailSent: { recipientEmail: string; status: string } | null;
   receipt: { label: string; value: string; emphasis?: boolean }[];
 } {
+  if (!isDemoMode()) {
+    throw badRequest("Online payment verification is not configured. Please pay with staff at the counter.");
+  }
   const resolved = requireToken(token);
   const order = requireOrder(orderId);
   if (order.qrToken !== resolved.token && order.tableId !== resolved.tableId) {

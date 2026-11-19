@@ -13,6 +13,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    env: { RMS_ENV: "demo" },
     include: ["tests/**/*.test.ts"],
     globals: false,
     testTimeout: 30000,

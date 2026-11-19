@@ -203,7 +203,7 @@ export function tenantDirectory(): { code: string; name: string; tagline: string
 
 /** Set the directory behind an env switch for deployments that want secrecy. */
 export function tenantDirectoryEnabled(): boolean {
-  return process.env.RMS_TENANT_DIRECTORY !== "0";
+  return process.env.RMS_TENANT_DIRECTORY === "1" || (isDemoMode() && process.env.RMS_TENANT_DIRECTORY !== "0");
 }
 
 // ------------------------------------------------------------------- scoping
@@ -400,7 +400,7 @@ export function createTenant(input: CreateTenantInput): CreatedTenant {
   const starter: TenantStarter = input.starter === "demo" ? "demo" : "blank";
   // Demo data is allowed in production only through the explicit seed escape
   // hatch the original deployment docs already use.
-  const demoAllowed = isDemoMode() || process.env.RMS_ALLOW_DEMO_SEED === "1";
+  const demoAllowed = isDemoMode();
   if (starter === "demo" && !demoAllowed) {
     throw badRequest("The demo starter is available only in demo mode; use a blank workspace in production");
   }
