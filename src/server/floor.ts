@@ -265,7 +265,7 @@ export function createTable(input: TableLayoutInput): TableSnapshot {
   const sortOrder = Number(get<{ next: number }>("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM tables")?.next ?? 0);
   run(
     `INSERT INTO tables (id, label, section_id, capacity, shape, x, y, w, h, rotation, status, guests, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'available', 0, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', 0, ?)`,
     id,
     label,
     input.sectionId ?? null,
