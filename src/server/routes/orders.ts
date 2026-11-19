@@ -8,6 +8,7 @@
 import { route, created, badRequest } from "@/server/router";
 import {
   applyDiscount,
+  approveOrder,
   createOrder,
   fireEntrees,
   getActiveOrders,
@@ -111,6 +112,8 @@ route("DELETE", "orders/:id/lines/:lineId", "pos.open", ({ params, body, query, 
 });
 
 route("POST", "orders/:id/send", "pos.send", ({ params, user }) => sendToKitchen(params.id, user));
+
+route("POST", "orders/:id/approve", "pos.send", ({ params, user }) => approveOrder(params.id, user));
 
 route("POST", "orders/:id/fire", "pos.fire", ({ params, user }) => fireEntrees(params.id, user));
 

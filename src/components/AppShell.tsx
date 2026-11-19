@@ -42,7 +42,7 @@ const NAV: NavGroup[] = [
         label: "Floor Plan",
         icon: "floor",
         permission: "host.seat",
-        badge: (metrics) => metrics.dirtyTables || null,
+        badge: (metrics) => ((metrics.openHelpRequests ?? 0) + (metrics.pendingQrOrders ?? 0) + metrics.dirtyTables) || null,
       },
       {
         href: "/host",
@@ -57,7 +57,7 @@ const NAV: NavGroup[] = [
     label: "Back of house",
     items: [
       {
-        href: "/kds/grill",
+        href: "/kds/all",
         label: "Kitchen Display",
         icon: "kitchen",
         permission: "kds.view",

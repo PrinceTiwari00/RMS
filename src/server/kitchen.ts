@@ -12,6 +12,7 @@ import { getStations, stationName } from "@/server/settings";
 import { getOrder, requireOrder } from "@/server/orders";
 import { DEFAULT_STATIONS, stationMeta, urgency } from "@/domain/kds";
 import { elapsedMinutes, nowStamp } from "@/domain/time";
+import { emitEvent } from "@/server/events";
 import type { ExpoStationBreakdown, ExpoTicket, KdsMetrics, KdsStationView, KdsTicket, PrepSheet, SessionUser } from "@/types";
 import type { OrderSnapshot } from "@/types";
 
@@ -78,6 +79,13 @@ export function getStationView(stationId: string): KdsStationView {
     oldestMinutes: working.filter((line) => line.kdsStatus === "PENDING").reduce((max, line) => Math.max(max, line.minutesElapsed), 0),
     itemCount: working.length,
   };
+}
+
+/** Multi-column KDS board: every station lane side-by-side in one payload. */
+export function getAllStationsBoard(): { stations: KdsStationView[]; metrics: KdsMetrics } {
+  const configured = getStations().length ? getStations() : DEFAULT_STATIONS.map((station) => ({ ...station }));
+  const views = configured.map((station) => getStationView(station.id));
+  return { stations: views, metrics: metrics() };
 }
 
 /** The expeditor's master screen: whole tickets with per-station completion. */
@@ -164,6 +172,8 @@ export function markReady(lineId: string, actor: SessionUser | null): { lineId: 
 
   const changed = run("UPDATE order_items SET kds_status = 'READY', ready_at = ? WHERE id = ? AND kds_status = 'PENDING'", nowStamp(), lineId).changes;
   if (!changed) throw badRequest("That item is no longer pending");
+  const ord = get<{ table_id: string | null }>("SELECT table_id FROM orders WHERE id = ?", line.order_id);
+  emitEvent("kds.updated", { orderId: line.order_id, tableId: ord?.table_id ?? null });
   return { lineId, orderId: line.order_id, allReady: orderAllReady(line.order_id) };
 }
 
@@ -177,6 +187,8 @@ export function markUnready(lineId: string, actor: SessionUser | null): { lineId
   if (line.bumped_at) throw badRequest("That ticket has already been bumped");
   run("UPDATE order_items SET kds_status = 'PENDING', ready_at = NULL WHERE id = ? AND kds_status = 'READY'", lineId);
   void actor;
+  const ord = get<{ table_id: string | null }>("SELECT table_id FROM orders WHERE id = ?", line.order_id);
+  emitEvent("kds.updated", { orderId: line.order_id, tableId: ord?.table_id ?? null });
   return { lineId, orderId: line.order_id };
 }
 
@@ -199,6 +211,7 @@ export function bumpTicket(orderId: string, actor: SessionUser | null): { orderI
   const stamp = nowStamp();
   const bumped = run("UPDATE order_items SET bumped_at = ? WHERE order_id = ? AND bumped_at IS NULL", stamp, orderId).changes;
   audit(actor, "kds.bump", "order", orderId, `ticket ${order.checkNumber ?? ""} bumped at expo`);
+  emitEvent("kds.updated", { orderId, tableId: order.tableId });
   return { orderId, bumped };
 }
 
@@ -208,6 +221,7 @@ export function recallTicket(orderId: string, actor: SessionUser | null): { orde
   if (order.status !== "sent") throw badRequest("Only a live ticket can be recalled");
   run("UPDATE order_items SET bumped_at = NULL WHERE order_id = ?", orderId);
   audit(actor, "kds.recall", "order", orderId, `ticket ${order.checkNumber ?? ""} recalled`);
+  emitEvent("kds.updated", { orderId, tableId: order.tableId });
   return { orderId };
 }
 

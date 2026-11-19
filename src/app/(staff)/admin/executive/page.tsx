@@ -13,12 +13,14 @@
  * is distinguishable from a merely busy one.
  */
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
-import { usePoll } from "@/lib/store";
+import { useLiveEvents, usePoll, useStore } from "@/lib/store";
 import { RangePicker, rangeQuery } from "@/components/RangePicker";
 import {
   BarList,
   Card,
+  Chip,
   ColumnChart,
   Donut,
   Empty,
@@ -30,12 +32,29 @@ import {
 import { formatMoney, formatMoneyShort, formatQuantity } from "@/domain/money";
 import { formatDay } from "@/domain/time";
 import { LABOR_TARGET } from "@/domain/labor";
-import type { BusinessDay, ExecutiveReport, SalesPoint } from "@/types";
+import type {
+  BusinessDay,
+  ExecutiveReport,
+  GuestReviewInfo,
+  KdsMetrics,
+  Metrics,
+  OrderSnapshot,
+  SalesPoint,
+  ServiceRequestInfo,
+} from "@/types";
 
 interface ExecutiveResponse {
   preset: string;
   report: ExecutiveReport;
   days: BusinessDay[];
+}
+
+interface OverviewResponse {
+  metrics: Metrics;
+  pendingQrOrders: OrderSnapshot[];
+  serviceRequests: ServiceRequestInfo[];
+  kds: KdsMetrics;
+  reviews: GuestReviewInfo[];
 }
 
 const CHANNEL_TONES: Record<string, string> = {
@@ -46,12 +65,29 @@ const CHANNEL_TONES: Record<string, string> = {
 };
 
 export default function ExecutivePage() {
+  const { state } = useStore();
   const [preset, setPreset] = useState("7d");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
 
   const query = rangeQuery(preset, from, to);
   const { data } = usePoll<ExecutiveResponse>(`reports/executive?${query}`, { interval: 30000 });
+  const { data: overview, reload: reloadOverview } = usePoll<OverviewResponse>("overview", { interval: 4000 });
+
+  useLiveEvents(
+    (ev) => {
+      if (
+        ev.type === "floor.updated" ||
+        ev.type === "order.updated" ||
+        ev.type === "kds.updated" ||
+        ev.type === "help.updated" ||
+        ev.type === "review.created"
+      ) {
+        void reloadOverview();
+      }
+    },
+    { enabled: Boolean(state?.tenant) },
+  );
 
   const report = data?.report;
   const days = data?.days ?? [];
@@ -88,7 +124,7 @@ export default function ExecutivePage() {
     <div className="flex flex-col gap-4 p-4">
       <div className="flex flex-wrap items-center gap-3">
         <div>
-          <h1 className="text-[19px] font-extrabold text-ink">Executive Dashboard</h1>
+          <h1 className="text-[19px] font-extrabold text-ink">Executive Dashboard & Live Overview</h1>
           <p className="text-[12px] text-ink-faint">
             {report.range.label} · {formatDay(report.range.from)} → {formatDay(report.range.to)} · {report.range.days} day
             {report.range.days === 1 ? "" : "s"}
@@ -107,6 +143,80 @@ export default function ExecutivePage() {
           />
         </div>
       </div>
+
+      {/* --------------------------------------------------- 10 Overview Live Strip */}
+      {overview && (
+        <Card className="border-brand-200 bg-gradient-to-br from-paper-raised to-brand-50/40">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-wider text-brand-600">Live Operations Overview</p>
+              <p className="text-xs text-ink-soft">Real-time floor, kitchen, QR queue, and guest satisfaction</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip tone={overview.metrics.floorHealth === "ALL TABLES OK" ? "ok" : "ember"} dot>
+                {overview.metrics.floorHealth}
+              </Chip>
+              <Link href="/floor" className="btn btn-soft !py-1 !text-xs">Live Floor →</Link>
+              <Link href="/kds/all" className="btn btn-soft !py-1 !text-xs">KDS All →</Link>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="rounded-xl border border-rule bg-paper-raised p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">Floor Occupancy</p>
+              <p className="tnum mt-1 text-2xl font-black text-ink">
+                {overview.metrics.occupiedTables}/{overview.metrics.totalTables}
+              </p>
+              <p className="text-[11px] text-ink-soft">{overview.metrics.occupancy}% occupied</p>
+            </div>
+            <div className="rounded-xl border border-rule bg-paper-raised p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">Total Orders Today</p>
+              <p className="tnum mt-1 text-2xl font-black text-ink">
+                {overview.metrics.checksToday + overview.metrics.openOrders + overview.metrics.sentOrders}
+              </p>
+              <p className="text-[11px] text-ink-soft">
+                {overview.metrics.sentOrders + overview.metrics.openOrders} active · {overview.pendingQrOrders.length} QR awaiting
+              </p>
+            </div>
+            <div className="rounded-xl border border-rule bg-paper-raised p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">Live Sales Today</p>
+              <p className="tnum mt-1 text-2xl font-black text-brand-600">
+                {formatMoneyShort(overview.metrics.salesToday)}
+              </p>
+              <p className="text-[11px] text-ink-soft">{overview.metrics.checksToday} settled checks</p>
+            </div>
+            <div className="rounded-xl border border-rule bg-paper-raised p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">Guest Rating & Help</p>
+              <p className="tnum mt-1 text-2xl font-black text-ink">
+                {(overview.metrics.reviewCount ?? 0) > 0 ? `${overview.metrics.avgReviewRating} ★` : "—"}
+              </p>
+              <p className="text-[11px] text-ink-soft">
+                {overview.metrics.reviewCount ?? 0} reviews · {overview.serviceRequests.length} active help calls
+              </p>
+            </div>
+          </div>
+
+          {overview.reviews.length > 0 && (
+            <div className="mt-3 border-t border-rule pt-3">
+              <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink-faint">Recent Guest Feedback</p>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {overview.reviews.slice(0, 4).map((rev) => (
+                  <div key={rev.id} className="rounded-xl border border-rule bg-paper-raised p-2.5 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-ink">{rev.tableLabel || rev.guestName || "Guest"}</span>
+                      <span className="font-black text-ember-500">{"★".repeat(rev.rating)}</span>
+                    </div>
+                    {rev.tags.length > 0 && (
+                      <p className="mt-1 truncate text-[10px] font-semibold text-brand-600">{rev.tags.join(" · ")}</p>
+                    )}
+                    {rev.comment && <p className="mt-1 line-clamp-2 text-[11px] text-ink-soft">“{rev.comment}”</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* ------------------------------------------------------------------ KPIs */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

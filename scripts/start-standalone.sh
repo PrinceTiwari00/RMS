@@ -26,6 +26,7 @@ rm -rf .next/standalone/.next/static
 cp -a .next/static .next/standalone/.next/static
 mkdir -p .next/standalone/src/db
 cp src/db/schema.sql .next/standalone/src/db/schema.sql
+cp src/db/control-schema.sql .next/standalone/src/db/control-schema.sql
 
 # standalone/server.js changes cwd to its own directory. Resolve the persistent
 # database location before that happens so it can never select a traced database.

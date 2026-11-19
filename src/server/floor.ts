@@ -13,6 +13,8 @@ import type { TableStatus } from "@/domain/tables";
 import type { Section, SessionUser, TableSnapshot } from "@/types";
 import { createOrder } from "@/server/orders";
 import { audit } from "@/server/audit";
+import { emitEvent } from "@/server/events";
+import { closeTableSession } from "@/server/engagement";
 
 interface TableRow {
   id: string;
@@ -38,13 +40,17 @@ interface TableRow {
   order_total: number | null;
   item_count: number | null;
   oldest_minutes: number | null;
+  active_help_count: number | null;
+  pending_approval_count: number | null;
 }
 
 const TABLE_SELECT = `
   SELECT t.*, s.name AS section_name, e.name AS server_name,
          o.id AS order_id, o.status AS order_status, o.check_number,
          o.total AS order_total,
-         (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id AND oi.is_void = 0) AS item_count
+         (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id AND oi.is_void = 0) AS item_count,
+         (SELECT COUNT(*) FROM service_requests sr WHERE sr.table_id = t.id AND sr.status IN ('open','acknowledged')) AS active_help_count,
+         (SELECT COUNT(*) FROM orders po WHERE po.table_id = t.id AND po.status IN ('open','sent') AND po.approval_status = 'pending_staff') AS pending_approval_count
     FROM tables t
     LEFT JOIN sections s ON s.id = t.section_id
     LEFT JOIN employees e ON e.id = t.server_id
@@ -59,6 +65,21 @@ export function getSections(): Section[] {
 export function getTables(): TableSnapshot[] {
   return all<TableRow>(`${TABLE_SELECT} ORDER BY t.sort_order, t.label`).map((row) => {
     const minutesSeated = row.seated_at ? elapsedMinutes(row.seated_at) : 0;
+    const activeHelpCount = Number(row.active_help_count ?? 0);
+    const pendingApprovalCount = Number(row.pending_approval_count ?? 0);
+    const status = row.status as TableStatus;
+    const liveStage: TableSnapshot["liveStage"] =
+      activeHelpCount > 0
+        ? "HELP"
+        : status === "billed"
+          ? "BILL"
+          : pendingApprovalCount > 0 || status === "seated"
+            ? "ORDERING"
+            : status === "ordered"
+              ? "EATING"
+              : status === "dirty"
+                ? "DIRTY"
+                : "IDLE";
     return {
       id: row.id,
       label: row.label,
@@ -71,7 +92,7 @@ export function getTables(): TableSnapshot[] {
       w: row.w,
       h: row.h,
       rotation: row.rotation,
-      status: row.status as TableStatus,
+      status,
       guests: row.guests,
       serverId: row.server_id,
       serverName: row.server_name ?? "",
@@ -83,6 +104,9 @@ export function getTables(): TableSnapshot[] {
       totalPaisa: Number(row.order_total ?? 0),
       itemCount: Number(row.item_count ?? 0),
       oldestItemMinutes: Number(row.oldest_minutes ?? 0),
+      activeHelpCount,
+      pendingApprovalCount,
+      liveStage,
     };
   });
 }
@@ -158,8 +182,10 @@ export function setTableStatus(tableId: string, to: TableStatus, actor: SessionU
     }
   });
   if (to === "available") {
+    closeTableSession(tableId);
     audit(actor, "floor.reset", "table", tableId, `table ${table.label} cleared`);
   }
+  emitEvent("floor.updated", { tableId });
   return requireTable(tableId);
 }
 
@@ -177,7 +203,9 @@ export function releaseTable(tableId: string, actor: SessionUser | null): TableS
   tx(() => {
     run("UPDATE tables SET status = 'available', guests = 0, server_id = NULL, seated_at = NULL WHERE id = ?", tableId);
   });
+  closeTableSession(tableId);
   audit(actor, "floor.release", "table", tableId, `table ${table.label} released`);
+  emitEvent("floor.updated", { tableId });
   return requireTable(tableId);
 }
 

@@ -14,37 +14,62 @@
  * — because hiding a real table from the floor would be worse than drawing it
  * slightly wrong.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, errorMessage } from "@/lib/api";
-import { usePoll, useStore, useTicker } from "@/lib/store";
+import { useLiveEvents, usePoll, useStore, useTicker } from "@/lib/store";
 import { Button, Card, Chip, Empty, Icon, Modal, TextInput, toast } from "@/components/ui";
 import { formatMoney } from "@/domain/money";
 import { ALLOWED_TRANSITIONS, TABLE_STATUS_LABEL, turnLabel, type TableStatus } from "@/domain/tables";
-import type { Section, TableSnapshot } from "@/types";
+import type { OrderSnapshot, Section, ServiceRequestInfo, TableSnapshot } from "@/types";
 
 interface FloorResponse {
   sections: Section[];
   tables: TableSnapshot[];
   stats: { total: number; occupied: number; seats: number; guests: number; dirty: number; byStatus: Record<string, number> };
   servers: { id: string; name: string; initials: string; color: string; roleTitle: string }[];
+  serviceRequests?: ServiceRequestInfo[];
+  pendingQrOrders?: OrderSnapshot[];
 }
 
 const STATUS_LEGEND: TableStatus[] = ["available", "seated", "ordered", "billed", "dirty"];
 
 export default function FloorPage() {
-  const { allowed } = useStore();
+  const { state, allowed } = useStore();
   const router = useRouter();
   useTicker(20000); // re-render so the turn timers stay live
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const { data, reload } = usePoll<FloorResponse>("floor", { interval: 3000 });
   const [sectionId, setSectionId] = useState("all");
   const [selected, setSelected] = useState<TableSnapshot | null>(null);
   const [seating, setSeating] = useState<TableSnapshot | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  useLiveEvents(
+    (ev) => {
+      if (
+        ev.type === "floor.updated" ||
+        ev.type === "help.updated" ||
+        ev.type === "order.updated" ||
+        ev.type === "kds.updated"
+      ) {
+        void reload();
+      }
+    },
+    { enabled: Boolean(state?.tenant) },
+  );
 
   const sections = data?.sections ?? [];
   const tables = data?.tables ?? [];
   const stats = data?.stats;
+  const serviceRequests = data?.serviceRequests ?? [];
+  const pendingQrOrders = data?.pendingQrOrders ?? [];
 
   const visible = useMemo(
     () => (sectionId === "all" ? tables : tables.filter((table) => table.sectionId === sectionId)),
@@ -76,6 +101,38 @@ export default function FloorPage() {
         await reload();
       } catch (error) {
         toast(errorMessage(error), "late");
+      }
+    },
+    [reload],
+  );
+
+  const approveQrOrder = useCallback(
+    async (orderId: string, label: string) => {
+      setBusyAction(orderId);
+      try {
+        await api.post(`orders/${orderId}/approve`);
+        toast(`${label} sent to kitchen ✓`, "ok");
+        await reload();
+      } catch (error) {
+        toast(errorMessage(error), "late");
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [reload],
+  );
+
+  const handleRequest = useCallback(
+    async (reqId: string, action: "acknowledge" | "resolve") => {
+      setBusyAction(reqId);
+      try {
+        await api.post(`floor/requests/${reqId}/${action}`);
+        toast(action === "resolve" ? "Service request resolved ✓" : "Waiter acknowledged", "ok");
+        await reload();
+      } catch (error) {
+        toast(errorMessage(error), "late");
+      } finally {
+        setBusyAction(null);
       }
     },
     [reload],
@@ -118,18 +175,105 @@ export default function FloorPage() {
       </div>
 
       {/* ---------------------------------------------------------------- summary */}
-      <div className="grid grid-cols-2 gap-2 px-4 py-2.5 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 px-4 py-2.5 sm:grid-cols-6">
         <MiniStat label="Occupancy" value={`${stats?.occupied ?? 0}/${stats?.total ?? 0}`} sub={`${occupancyPercent(stats)}% full`} />
         <MiniStat label="Guests seated" value={String(stats?.guests ?? 0)} sub={`${stats?.seats ?? 0} seats on the floor`} />
+        <MiniStat
+          label="Help alerts"
+          value={String(serviceRequests.length)}
+          tone={serviceRequests.length ? "warn" : "neutral"}
+          sub={serviceRequests.length ? "Waiter needed" : "All tables ok"}
+        />
+        <MiniStat
+          label="QR Approvals"
+          value={String(pendingQrOrders.length)}
+          tone={pendingQrOrders.length ? "warn" : "neutral"}
+          sub={pendingQrOrders.length ? "Waiting for staff" : "Queue clear"}
+        />
         <MiniStat
           label="Needs cleaning"
           value={String(stats?.dirty ?? 0)}
           tone={stats?.dirty ? "warn" : "neutral"}
           sub={stats?.dirty ? "Tap to reset" : "All tables ready"}
         />
-        <MiniStat label="On order" value={String(stats?.byStatus.ordered ?? 0)} sub="Kitchen working" />
         <MiniStat label="Billed" value={String(stats?.byStatus.billed ?? 0)} sub="Awaiting payment" />
       </div>
+
+      {/* --------------------------------------------------- live alerts & qr queue */}
+      {(serviceRequests.length > 0 || pendingQrOrders.length > 0) && (
+        <div className="grid gap-2.5 px-4 pb-2.5 md:grid-cols-2">
+          {serviceRequests.map((req) => {
+            const sec = req.elapsedSeconds + tick;
+            const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+            const ss = String(sec % 60).padStart(2, "0");
+            return (
+              <div
+                key={req.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-ember-400 bg-ember-50 px-3.5 py-2.5 shadow-sm"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <Chip tone="ember" dot>HELP · {mm}:{ss}</Chip>
+                    <p className="truncate text-sm font-black text-ink">
+                      {req.tableLabel} · {req.requestType.replace("_", " ")}
+                    </p>
+                  </div>
+                  <p className="mt-0.5 text-[11px] font-semibold text-ink-soft">
+                    Assigned: {req.assignedWaiterName} {req.guestName ? `· Requested by ${req.guestName}` : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {req.status === "open" && (
+                    <Button
+                      variant="soft"
+                      size="sm"
+                      disabled={busyAction === req.id}
+                      onClick={() => void handleRequest(req.id, "acknowledge")}
+                    >
+                      Acknowledge
+                    </Button>
+                  )}
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={busyAction === req.id}
+                    onClick={() => void handleRequest(req.id, "resolve")}
+                  >
+                    Resolve ✓
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+
+          {pendingQrOrders.map((ord) => (
+            <div
+              key={ord.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-brand-400 bg-brand-50 px-3.5 py-2.5 shadow-sm"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <Chip tone="brand" dot>NEW QR ORDER</Chip>
+                  <p className="truncate text-sm font-black text-ink">
+                    {ord.tableLabel} · #{ord.checkNumber ?? "—"}
+                  </p>
+                </div>
+                <p className="mt-0.5 truncate text-[11px] font-semibold text-ink-soft">
+                  {ord.activeItems.map((i) => `${i.quantity}× ${i.name}`).join(", ")} · {formatMoney(ord.total)}
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={busyAction === ord.id}
+                onClick={() => void approveQrOrder(ord.id, `${ord.tableLabel} #${ord.checkNumber ?? ""}`)}
+              >
+                Send to kitchen →
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ------------------------------------------------------------------- room */}
       <div className="scroll-y flex-1 px-4 pb-4">
@@ -305,10 +449,12 @@ function occupancyPercent(stats?: FloorResponse["stats"]): number {
   return Math.round((stats.occupied / stats.total) * 100);
 }
 
-/** One table drawn on the canvas, with its live turn timer. */
+/** One table drawn on the canvas, with its live turn timer & operational badge. */
 function TableToken({ table, onClick }: { table: TableSnapshot; onClick: () => void }) {
-  const colour = `var(--table-${table.status})`;
-  const occupied = table.status !== "available";
+  const hasHelp = (table.activeHelpCount ?? 0) > 0;
+  const hasPendingQr = (table.pendingApprovalCount ?? 0) > 0;
+  const colour = hasHelp ? "var(--color-ember-500)" : `var(--table-${table.status})`;
+  const occupied = table.status !== "available" || hasHelp;
   const radius =
     table.shape === "round"
       ? "50%"
@@ -317,14 +463,17 @@ function TableToken({ table, onClick }: { table: TableSnapshot; onClick: () => v
         : table.shape === "bar"
           ? "6px"
           : "8px";
-  const alert = table.oldestItemMinutes > 15 || table.minutesSeated > 90;
+  const alert = hasHelp || table.oldestItemMinutes > 15 || table.minutesSeated > 90;
+  const stageBadge = table.liveStage && table.liveStage !== "IDLE" ? table.liveStage : null;
 
   return (
     <button
       type="button"
       onClick={onClick}
-      title={`${table.label} · ${TABLE_STATUS_LABEL[table.status]}${table.guests ? ` · ${table.guests} guests` : ""}`}
-      className="absolute flex flex-col items-center justify-center gap-0.5 border-2 text-center transition-transform hover:z-10 hover:scale-[1.04] active:scale-[0.98]"
+      title={`${table.label} · ${stageBadge ?? TABLE_STATUS_LABEL[table.status]}${table.guests ? ` · ${table.guests} guests` : ""}`}
+      className={`absolute flex flex-col items-center justify-center gap-0.5 border-2 text-center transition-transform hover:z-10 hover:scale-[1.04] active:scale-[0.98] ${
+        hasHelp ? "animate-pulse" : ""
+      }`}
       style={{
         left: `${table.x}%`,
         top: `${table.y}%`,
@@ -335,17 +484,24 @@ function TableToken({ table, onClick }: { table: TableSnapshot; onClick: () => v
         background: occupied ? colour : "var(--color-paper-raised)",
         color: occupied ? "#fff" : "var(--color-ink)",
         transform: table.rotation ? `rotate(${table.rotation}deg)` : undefined,
-        boxShadow: alert ? `0 0 0 3px color-mix(in srgb, var(--color-late) 45%, transparent)` : "0 1px 3px rgb(18 24 28 / 0.14)",
+        boxShadow: alert
+          ? `0 0 0 4px color-mix(in srgb, ${hasHelp ? "var(--color-ember-500)" : "var(--color-late)"} 45%, transparent)`
+          : "0 1px 3px rgb(18 24 28 / 0.14)",
       }}
     >
       <span className="text-[13px] font-black leading-none">{table.label}</span>
-      <span className="text-[9px] font-bold leading-none opacity-80">{table.capacity} seats</span>
+      {stageBadge ? (
+        <span className="rounded-full bg-black/25 px-1.5 py-px text-[8px] font-black uppercase tracking-wider leading-tight">
+          {hasPendingQr ? "APPROVE" : stageBadge}
+        </span>
+      ) : (
+        <span className="text-[9px] font-bold leading-none opacity-80">{table.capacity} seats</span>
+      )}
       {occupied && table.minutesSeated > 0 && (
         <span className="tnum rounded-full bg-black/22 px-1.5 text-[9px] font-bold leading-tight">
           {turnLabel(table.minutesSeated)}
         </span>
       )}
-      {table.status === "dirty" && <span className="text-[9px] font-black uppercase leading-none">clean me</span>}
     </button>
   );
 }

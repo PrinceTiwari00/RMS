@@ -19,6 +19,7 @@ export interface ModifierSelection {
   optionIds: string[];
   quantity: number;
   note: string;
+  includeUpsell?: boolean;
 }
 
 export function ModifierModal({
@@ -28,6 +29,7 @@ export function ModifierModal({
   onClose,
   onConfirm,
   confirmLabel = "Add to ticket",
+  showUpsell = false,
 }: {
   item: MenuItem | null;
   open: boolean;
@@ -36,10 +38,12 @@ export function ModifierModal({
   onClose: () => void;
   onConfirm: (selection: ModifierSelection) => void;
   confirmLabel?: string;
+  showUpsell?: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [quantity, setQuantity] = useState(1);
   const [note, setNote] = useState("");
+  const [includeUpsell, setIncludeUpsell] = useState(false);
 
   // Reset whenever a different item (or a re-open of an existing line) arrives.
   useEffect(() => {
@@ -47,6 +51,7 @@ export function ModifierModal({
     setSelected(initial?.optionIds ?? defaultOptions(item));
     setQuantity(initial?.quantity ?? 1);
     setNote(initial?.note ?? "");
+    setIncludeUpsell(Boolean(initial?.includeUpsell));
   }, [open, item?.id, initial]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totals = useMemo(() => {
@@ -56,8 +61,9 @@ export function ModifierModal({
       .filter((option) => selected.includes(option.id))
       .reduce((sum, option) => sum + option.price, 0);
     const unit = item.price + extras;
-    return { unit, total: unit * quantity };
-  }, [item, selected, quantity]);
+    const upsellExtra = showUpsell && includeUpsell && item.upsellItem ? item.upsellItem.discountedPrice : 0;
+    return { unit, total: (unit + upsellExtra) * quantity };
+  }, [item, selected, quantity, showUpsell, includeUpsell]);
 
   if (!open || !item) return null;
 
@@ -124,9 +130,51 @@ export function ModifierModal({
 
         {/* -------------------------------------------------------------- groups */}
         <div className="scroll-y flex-1 px-4 py-3">
+          {(item.allergens || item.spiceLevel > 0 || (showUpsell && item.upsellItem)) && (
+            <div className="mb-4 divide-y divide-rule rounded-xl border border-rule bg-paper">
+              <div className="flex items-center justify-between px-3 py-2 text-xs">
+                <span className="font-bold uppercase tracking-wider text-ink-faint">Allergens</span>
+                <span className="font-semibold text-ink">{item.allergens || "None listed"}</span>
+              </div>
+              {item.spiceLevel > 0 && (
+                <div className="flex items-center justify-between px-3 py-2 text-xs">
+                  <span className="font-bold uppercase tracking-wider text-ink-faint">Spice</span>
+                  <span className="flex items-center gap-0.5 text-sm" aria-label={`Spice level ${item.spiceLevel} of 3`}>
+                    {[1, 2, 3].map((lvl) => (
+                      <span key={lvl} className={lvl <= item.spiceLevel ? "opacity-100" : "opacity-20"}>
+                        🌶️
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
+              {showUpsell && item.upsellItem && (
+                <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                  <div>
+                    <span className="font-bold uppercase tracking-wider text-ink-faint">Deal · </span>
+                    <span className="font-extrabold text-ember-600">
+                      {item.upsellItem.emoji} + {item.upsellItem.name} ({item.upsellItem.discountPercent}% off)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIncludeUpsell((v) => !v)}
+                    className={`rounded-full px-3 py-1 text-[11px] font-extrabold transition-colors ${
+                      includeUpsell
+                        ? "bg-ember-500 text-white"
+                        : "border border-ember-300 bg-ember-50 text-ember-700 hover:bg-ember-100"
+                    }`}
+                  >
+                    {includeUpsell ? "Added ✓" : `+ ${formatMoney(item.upsellItem.discountedPrice)}`}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {item.groups.length === 0 && (
-            <p className="py-6 text-center text-sm text-ink-faint">
-              This item has no customisation — add it straight to the ticket.
+            <p className="py-4 text-center text-sm text-ink-faint">
+              Ready to add straight to your order.
             </p>
           )}
 
@@ -253,7 +301,7 @@ export function ModifierModal({
             <button
               type="button"
               disabled={problems.length > 0}
-              onClick={() => onConfirm({ optionIds: selected, quantity, note })}
+              onClick={() => onConfirm({ optionIds: selected, quantity, note, includeUpsell })}
               className="btn btn-primary !px-5"
             >
               {confirmLabel}

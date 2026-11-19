@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, errorMessage } from "@/lib/api";
-import { usePoll, useStore } from "@/lib/store";
+import { useLiveEvents, usePoll, useStore } from "@/lib/store";
 import { Button, Chip, Empty, Icon, Modal, TextInput, toast, Avatar } from "@/components/ui";
 import { ModifierModal, defaultOptions, type ModifierSelection } from "@/components/ModifierModal";
 import { formatMoney } from "@/domain/money";
@@ -39,10 +39,41 @@ export default function PosPage() {
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
 
   const { data: orderData, reload: reloadOrders } = usePoll<{ orders: OrderSnapshot[] }>("orders", { interval: 3000 });
-  const { data: floorData } = usePoll<{ tables: TableSnapshot[] }>("floor", { interval: 4000 });
+  const { data: floorData, reload: reloadFloor } = usePoll<{ tables: TableSnapshot[] }>("floor", { interval: 4000 });
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+
+  useLiveEvents(
+    (ev) => {
+      if (ev.type === "order.updated" || ev.type === "kds.updated" || ev.type === "floor.updated") {
+        void reloadOrders();
+        void reloadFloor();
+      }
+    },
+    { enabled: Boolean(state?.tenant) },
+  );
 
   const orders = orderData?.orders ?? [];
   const tables = floorData?.tables ?? [];
+  const pendingQrOrders = useMemo(
+    () => orders.filter((order) => order.status !== "closed" && order.approvalStatus === "pending_staff"),
+    [orders],
+  );
+
+  const approveQrOrder = useCallback(
+    async (order: OrderSnapshot) => {
+      setApprovingId(order.id);
+      try {
+        await api.post(`orders/${order.id}/approve`);
+        toast(`${order.tableLabel || "Order"} #${order.checkNumber ?? ""} sent to kitchen ✓`, "ok");
+        await reloadOrders();
+      } catch (error) {
+        toast(errorMessage(error), "late");
+      } finally {
+        setApprovingId(null);
+      }
+    },
+    [reloadOrders],
+  );
 
   // Follow the server's own tickets first; fall back to the most recent open one.
   const myOrders = useMemo(
@@ -220,6 +251,46 @@ export default function PosPage() {
             </RailChip>
           ))}
         </div>
+
+        {/* Staff QR Approval Queue */}
+        {pendingQrOrders.length > 0 && (
+          <div className="border-b border-ember-200 bg-ember-50/80 px-3 py-2">
+            <div className="mb-1.5 flex items-center justify-between">
+              <p className="text-[11px] font-black uppercase tracking-wider text-ember-700">
+                New QR orders awaiting kitchen approval ({pendingQrOrders.length})
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {pendingQrOrders.map((qrOrder) => (
+                <div
+                  key={qrOrder.id}
+                  className="flex items-center gap-2 rounded-xl border border-ember-300 bg-paper-raised px-2.5 py-1.5 shadow-xs"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setActiveOrderId(qrOrder.id)}
+                    className="text-left"
+                  >
+                    <p className="text-xs font-black text-ink">
+                      {qrOrder.tableLabel || "Table"} · #{qrOrder.checkNumber ?? "—"}
+                    </p>
+                    <p className="max-w-[180px] truncate text-[10px] text-ink-soft">
+                      {qrOrder.activeItems.map((i) => `${i.quantity}× ${i.name}`).join(", ")}
+                    </p>
+                  </button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={approvingId === qrOrder.id}
+                    onClick={() => void approveQrOrder(qrOrder)}
+                  >
+                    Send to kitchen →
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="scroll-y flex-1 p-3">
           {visibleItems.length === 0 ? (

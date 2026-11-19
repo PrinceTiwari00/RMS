@@ -57,6 +57,12 @@ export interface Settings {
   receiptFooter: string;
   qrOrderingEnabled: boolean;
   cfdEnabled: boolean;
+  wifiSsid: string;
+  wifiPassword: string;
+  qrRequireStaffApproval: boolean;
+  loyaltyRewardName: string;
+  loyaltyRewardPoints: number;
+  loyaltyPointsPer100: number;
 }
 
 export interface StationInfo {
@@ -106,6 +112,17 @@ export interface MenuItem {
   station: string;
   allergens: string;
   prepMinutes: number;
+  spiceLevel: number;
+  upsellItemId: string | null;
+  upsellDiscountPercent: number;
+  upsellItem?: {
+    id: string;
+    name: string;
+    emoji: string;
+    price: number;
+    discountedPrice: number;
+    discountPercent: number;
+  } | null;
   emoji: string;
   isAvailable: boolean;
   isFeatured: boolean;
@@ -218,6 +235,9 @@ export interface TableSnapshot {
   totalPaisa: number;
   itemCount: number;
   oldestItemMinutes: number;
+  activeHelpCount?: number;
+  pendingApprovalCount?: number;
+  liveStage?: "IDLE" | "ORDERING" | "EATING" | "HELP" | "BILL" | "DIRTY";
 }
 
 // ---------------------------------------------------------------------- orders
@@ -282,6 +302,11 @@ export interface OrderSnapshot extends OrderTotals {
   channel: "dine_in" | "takeout" | "delivery" | "qr";
   guests: number;
   qrToken: string | null;
+  sessionId: string | null;
+  guestId: string | null;
+  approvalStatus: "pending_staff" | "approved";
+  approvedAt: string | null;
+  approvedBy: string | null;
   guestName: string;
   note: string;
   businessDate: string | null;
@@ -763,8 +788,106 @@ export interface QrTokenInfo {
   url: string;
 }
 
+export interface TableGuest {
+  id: string;
+  sessionId: string;
+  name: string;
+  initials: string;
+  color: string;
+  loyaltyAccountId: string | null;
+  joinedAt: string;
+  lastSeenAt: string;
+}
+
+export interface TableSessionInfo {
+  id: string;
+  tableId: string;
+  tableLabel: string;
+  qrToken: string | null;
+  status: "active" | "closed";
+  openedAt: string;
+  closedAt: string | null;
+  guests: TableGuest[];
+}
+
+export type ServiceRequestType = "call_waiter" | "water" | "napkins" | "bill" | "cutlery" | "other";
+
+export interface ServiceRequestInfo {
+  id: string;
+  tableId: string;
+  tableLabel: string;
+  sessionId: string | null;
+  guestId: string | null;
+  guestName: string;
+  requestType: ServiceRequestType;
+  note: string;
+  status: "open" | "acknowledged" | "resolved";
+  assignedWaiterId: string | null;
+  assignedWaiterName: string;
+  createdAt: string;
+  acknowledgedAt: string | null;
+  resolvedAt: string | null;
+  elapsedSeconds: number;
+}
+
+export interface GuestReviewInfo {
+  id: string;
+  orderId: string | null;
+  tableId: string | null;
+  tableLabel: string;
+  guestName: string;
+  rating: number;
+  tags: string[];
+  comment: string;
+  createdAt: string;
+}
+
+export interface LoyaltyAccountInfo {
+  id: string;
+  phone: string;
+  email: string;
+  name: string;
+  points: number;
+  lifetimePoints: number;
+  rewardName: string;
+  rewardPoints: number;
+}
+
+export interface QuizQuestionView {
+  id: string;
+  question: string;
+  options: string[];
+  category: string;
+  correctIndex?: number;
+}
+
+export interface QuizParticipantView {
+  id: string;
+  guestId: string | null;
+  tableId: string | null;
+  tableLabel: string;
+  displayName: string;
+  avatarColor: string;
+  score: number;
+  answeredCurrentRound: boolean;
+}
+
+export interface QuizMatchView {
+  id: string;
+  mode: "in_table" | "table_vs_table";
+  status: "waiting" | "active" | "finished";
+  currentRound: number;
+  totalRounds: number;
+  challengerTableLabel: string;
+  opponentTableLabel: string | null;
+  question: QuizQuestionView | null;
+  participants: QuizParticipantView[];
+  tableScores: { tableId: string; tableLabel: string; score: number }[];
+}
+
 export interface GuestOrderView {
   token: string;
+  tableId: string | null;
   tableLabel: string;
   restaurantName: string;
   tagline: string;
@@ -773,8 +896,15 @@ export interface GuestOrderView {
   categories: Category[];
   menu: MenuItem[];
   settings: Settings;
+  session: TableSessionInfo | null;
   order: OrderSnapshot | null;
   paymentQr: string;
+  activeRequests: ServiceRequestInfo[];
+  estimatedRemainingSeconds: number;
+  estimatedTotalSeconds: number;
+  paidAmount: number;
+  remainingDue: number;
+  review: GuestReviewInfo | null;
 }
 
 export interface CfdView {
@@ -812,6 +942,11 @@ export interface Metrics {
   staffClockedIn: number;
   openPoCount: number;
   wasteToday: number;
+  openHelpRequests?: number;
+  pendingQrOrders?: number;
+  avgReviewRating?: number;
+  reviewCount?: number;
+  floorHealth?: "ALL TABLES OK" | "ATTENTION";
 }
 
 export interface AuditEntry {
