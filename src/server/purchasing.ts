@@ -8,6 +8,7 @@
  */
 import { all, get, run, tx, uuid } from "@/db/client";
 import { badRequest, notFound } from "@/server/router";
+import { isDemoMode } from "@/lib/session";
 import { audit } from "@/server/audit";
 import { getInventoryItem } from "@/server/inventory";
 import { getSettings } from "@/server/settings";
@@ -374,6 +375,7 @@ export function approvePo(poId: string, actor: SessionUser | null): PurchaseOrde
  * exact payload so a failed transmission can be retried from the admin portal.
  */
 export function sendPo(poId: string, channel: "edi_sftp" | "pdf_email" | "auto", actor: SessionUser | null): PurchaseOrder {
+  if (!isDemoMode()) throw badRequest("Vendor delivery transport is not configured. Export the purchase order for manual delivery; automatic dispatch is unavailable.");
   const po = requireStatus(poId, "approved");
   const vendor = getVendor(po.vendor_id);
   if (!vendor) throw notFound("Vendor not found");
@@ -579,6 +581,7 @@ export function poDocument(poId: string): { channel: "edi_sftp" | "pdf_email"; c
 
 /** Retry a failed transmission — the manual half of the job queue. */
 export function retryTransmission(transmissionId: string, actor: SessionUser | null): PoTransmission {
+  if (!isDemoMode()) throw badRequest("Vendor delivery transport is not configured; retry cannot confirm delivery.");
   const row = get<{ id: string; po_id: string; status: string; attempts: number; channel: string }>(
     "SELECT * FROM po_transmissions WHERE id = ?",
     transmissionId,

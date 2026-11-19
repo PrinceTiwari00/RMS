@@ -246,14 +246,14 @@ export function GuestPaymentModal({
             <Icon name="alert" className="mt-0.5 size-4 shrink-0" />
             {demoMode
               ? "Demo payment: no real money is collected."
-              : "Confirm after your wallet or card payment completes."}
+              : "Online payments are not available. Please ask staff to collect and verify payment at the counter."}
           </p>
 
           <Button
             variant="primary"
             size="lg"
             className="w-full"
-            disabled={busy || payBase <= 0}
+            disabled={!demoMode || busy || payBase <= 0}
             onClick={() => {
               setBusy(true);
               void api

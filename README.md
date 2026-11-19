@@ -22,33 +22,44 @@ the POS, guest cart, checkout, and reports.
 
 ## Run locally
 
-Requirements: **Node.js 22.5 or newer** (the app uses the built-in `node:sqlite`
+Requirements: **Node.js 22.22.3 or newer** (the app uses the built-in `node:sqlite`
 driver) and npm.
+
+For a clean client/production workspace (no sample staff, sales or menu):
 
 ```bash
 npm ci
-npm run db:seed
-npm run dev
+cp .env.example .env
+# Set RMS_SECRET_KEY and RMS_SETUP_TOKEN to independently generated random values.
+npm run build
+npm start
 ```
 
-Open `http://localhost:3000`. The platform registry is created at
-`data/control.db` and the demo restaurant at
-`data/tenants/terai-kitchen/rms.db`; both are ignored by Git. Seeding is
-idempotent; to erase and rebuild:
+Open `/platform`, create the platform owner using the setup token, then create a
+**blank** restaurant and its manager PIN. Remove `RMS_SETUP_TOKEN` after setup.
+The old `/setup` page redirects to this tenant-aware provisioning flow.
+For local development, `npm run dev` starts without automatically adding demo data.
+
+Demo fixtures remain available **only for explicit development/testing use**:
 
 ```bash
-npm run db:reset
+RMS_ENV=demo npm run db:seed
+RMS_ENV=demo npm run dev
+# Destructive reset of a disposable demo volume only:
+RMS_ENV=demo RMS_ALLOW_RESET=1 npm run db:reset
 ```
 
-Demo accounts:
+Never reuse a demo volume for clients. Production refuses to boot a volume with
+known demo identities or seed markers. Existing real restaurant data is never
+automatically deleted. See [production readiness](docs/PRODUCTION_READINESS.md)
+for the verification results, limitations and handover checklist.
 
-| Where | Who | Credentials |
-| --- | --- | --- |
-| `/platform` | Platform owner | `owner@rms.local` / `rms-super-admin` |
-| `/login` | Restaurant admin | restaurant `terai-kitchen`, PIN **2468** |
+## System guide
 
-Other staff PINs are shown on the PIN pad in demo mode. Never use demo
-credentials or the built-in development secret for a real deployment.
+Download the [8-page system and workflow guide (PDF)](docs/RMS-System-Guide.pdf)
+for the feature map, staff and guest journeys, back-office diagrams and current
+integration limitations. To regenerate it, install `reportlab==4.4.9` in a Python
+virtual environment and run `python scripts/generate-system-guide.py`.
 
 ## Main workspaces
 
@@ -80,11 +91,12 @@ without hardcoding a browser-facing backend origin.
 Settings are validated and saved atomically with an audit entry. Full-service,
 quick-service, and bar/nightclub presets change only workflow controls, never
 menu or financial history. KDS category routes are snapshotted onto new order
-lines, and the offline-payment switch and risk cap are enforced at checkout.
+lines, and offline payments are blocked outside demo mode until gateway capture exists.
 Role-matrix changes take effect on the next authenticated API request.
 
-Printer discovery is a manager-initiated, bounded scan of one explicitly entered
-IPv4 `/24` on port 9100. Device checks establish a TCP connection only; they do
+In explicit demo mode, printer discovery is a manager-initiated, bounded scan of
+one IPv4 `/24`. Outside demo mode discovery is disabled and device checks require
+an exact literal IP in `RMS_HARDWARE_ALLOWED_IPS`. Checks establish TCP only; they do
 not claim ESC/POS compatibility or EMV settlement. Live marketplace ingestion,
 SMS/email delivery, SFTP, and certified card processing still require the
 relevant provider onboarding and connector runtime.
@@ -105,7 +117,7 @@ Production first-run is one of:
 
 - `/platform` with `RMS_SETUP_TOKEN` (recommended), or
 - `RMS_PLATFORM_EMAIL` / `RMS_PLATFORM_PASSWORD` supplied at boot, or
-- the legacy single-store `/setup` flow, which still works for one restaurant.
+- `/setup` now redirects to `/platform` so new stores are registered correctly.
 
 Suspending a restaurant blocks its staff sign-in and API calls immediately without
 touching its data. `RMS_TENANT_DIRECTORY=0` hides restaurant names on the PIN pad.

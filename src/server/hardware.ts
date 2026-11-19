@@ -1,6 +1,7 @@
 /** Local-network helpers for manager-initiated printer/EMV configuration. */
 import { createConnection, isIP } from "node:net";
-import { badRequest } from "@/server/router";
+import { isDemoMode } from "@/lib/session";
+import { badRequest, forbidden } from "@/server/router";
 
 export interface TcpCheckResult {
   host: string;
@@ -25,6 +26,12 @@ export function validateNetworkHost(value: string): string {
 /** A connection check only — no bytes are sent to the device. */
 export function checkTcpConnection(hostInput: string, port: number, timeoutMs = 1200): Promise<TcpCheckResult> {
   const host = validateNetworkHost(hostInput);
+  // Cloud tenants must not probe the server network or metadata services.
+  // Literal IPs avoid DNS rebinding. Permit only operator-approved devices.
+  if (!isDemoMode()) {
+    const allowed = (process.env.RMS_HARDWARE_ALLOWED_IPS ?? "").split(",").map((ip) => ip.trim());
+    if (!isIP(host) || !allowed.includes(host)) throw forbidden("Device address is not in RMS_HARDWARE_ALLOWED_IPS");
+  }
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw badRequest("Port must be between 1 and 65535");
   const started = Date.now();
   return new Promise((resolve) => {
@@ -53,6 +60,7 @@ export async function discoverEscPos(subnetInput: string, port = 9100): Promise<
   scanned: number;
   devices: TcpCheckResult[];
 }> {
+  if (!isDemoMode()) throw forbidden("Network discovery is disabled outside demo mode; configure approved devices explicitly");
   const subnet = String(subnetInput ?? "").trim().replace(/\.$/, "");
   const octets = subnet.split(".").map(Number);
   if (octets.length !== 3 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {

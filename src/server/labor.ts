@@ -7,7 +7,8 @@
  * edit is flagged with who made it and why.
  */
 import { all, get, run, tx, uuid } from "@/db/client";
-import { badRequest, notFound } from "@/server/router";
+import { badRequest, notFound, forbidden } from "@/server/router";
+import { can } from "@/domain/permissions";
 import { audit } from "@/server/audit";
 import {
   grossPay,
@@ -71,6 +72,9 @@ export function closeTimeEntry(entryId: string, actor: SessionUser | null, at?: 
 }
 
 export function clockInByEmployee(employeeId: string, actor: SessionUser | null): TimeEntry {
+  if (!actor || (actor.id !== employeeId && !can(actor.permissions, "admin.timeclock"))) {
+    throw forbidden("Only time-clock managers may punch for another employee");
+  }
   const rate = Number(get<{ hourly_rate: number }>("SELECT COALESCE(r.hourly_rate, 0) AS hourly_rate FROM employees e LEFT JOIN roles r ON r.id = e.role_id WHERE e.id = ?", employeeId)?.hourly_rate ?? 0);
   const id = openTimeEntry(employeeId, rate);
   void actor;
@@ -78,6 +82,9 @@ export function clockInByEmployee(employeeId: string, actor: SessionUser | null)
 }
 
 export function clockOutByEmployee(employeeId: string, actor: SessionUser | null): TimeEntry {
+  if (!actor || (actor.id !== employeeId && !can(actor.permissions, "admin.timeclock"))) {
+    throw forbidden("Only time-clock managers may punch for another employee");
+  }
   const row = get<{ id: string }>("SELECT id FROM time_entries WHERE employee_id = ? AND clock_out IS NULL ORDER BY clock_in DESC LIMIT 1", employeeId);
   if (!row) throw badRequest("That employee is not clocked in");
   return closeTimeEntry(row.id, actor);

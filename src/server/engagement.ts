@@ -628,7 +628,7 @@ export function dispatchEmailReceipt(
     </div>`.trim();
 
   const id = uuid();
-  const status = demoMode ? "demo" : "sent";
+  const status = demoMode ? "demo" : "queued";
   run(
     `INSERT INTO email_receipts (id, order_id, recipient_email, subject, html_body, status, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,

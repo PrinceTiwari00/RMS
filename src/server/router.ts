@@ -76,7 +76,7 @@ function match(
     const expected = route.segments[index];
     const actual = segments[index];
     if (expected.startsWith(":")) {
-      params[expected.slice(1)] = decodeURIComponent(actual);
+      params[expected.slice(1)] = actual;
       continue;
     }
     if (expected !== actual) return null;

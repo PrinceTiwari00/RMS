@@ -40,11 +40,11 @@ export function isProduction(): boolean {
   const explicitMode = process.env.RMS_ENV?.toLowerCase();
   // An explicit RMS_ENV=demo supports reviewed demo/preview builds. Otherwise
   // a conventional NODE_ENV=production start must never fall back to demo data.
-  return explicitMode ? explicitMode === "production" : process.env.NODE_ENV === "production";
+  return explicitMode === "production" || (process.env.NODE_ENV === "production" && explicitMode !== "demo");
 }
 
 export function isDemoMode(): boolean {
-  return !isProduction();
+  return process.env.RMS_ENV?.toLowerCase() === "demo";
 }
 
 function base64url(input: string | Buffer): string {
@@ -77,7 +77,7 @@ export function issueToken(subject: string, options: IssueTokenOptions = {}): st
 export function verifyToken(token: string | undefined | null): VerifiedToken | null {
   if (!token || !token.includes(".")) return null;
   const [payload, signature] = token.split(".");
-  if (!payload || !signature) return null;
+  if (!payload || !signature || token.split(".").length !== 2) return null;
   const expected = sign(payload);
   const a = Buffer.from(expected);
   const b = Buffer.from(signature);
@@ -89,7 +89,12 @@ export function verifyToken(token: string | undefined | null): VerifiedToken | n
       scope?: string;
       iat?: number;
     };
-    if (!decoded.uid) return null;
+    if (typeof decoded.uid !== "string" || !decoded.uid) return null;
+    if (decoded.tid !== undefined && typeof decoded.tid !== "string") return null;
+    if (decoded.scope !== "staff" && decoded.scope !== "platform") return null;
+    // Cookie expiry is not an authorization boundary: stolen cookies can be replayed.
+    const age = Date.now() - Number(decoded.iat);
+    if (!Number.isFinite(decoded.iat) || age < -60_000 || age >= (decoded.scope === "platform" ? 8 : 12) * 60 * 60 * 1000) return null;
     const scope: TokenScope = decoded.scope === "platform" ? "platform" : "staff";
     return {
       uid: decoded.uid,

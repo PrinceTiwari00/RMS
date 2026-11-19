@@ -13,11 +13,8 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const productionMode = process.env.RMS_ENV
-  ? process.env.RMS_ENV.toLowerCase() === "production"
-  : process.env.NODE_ENV === "production";
-if (productionMode && process.env.RMS_ALLOW_RESET !== "1") {
-  throw new Error("Refusing to erase a production database. Use backups and set RMS_ALLOW_RESET=1 only for an intentional reset.");
+if (process.env.RMS_ENV?.toLowerCase() !== "demo" || process.env.NODE_ENV === "production" || process.env.RMS_ALLOW_RESET !== "1") {
+  throw new Error("Destructive demo reset requires RMS_ENV=demo, RMS_ALLOW_RESET=1 and a non-production Node environment. Never reset real restaurant data.");
 }
 
 const here = dirname(fileURLToPath(import.meta.url));

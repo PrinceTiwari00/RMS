@@ -1,3 +1,4 @@
+import { isDemoMode } from "@/lib/session";
 /**
  * Checkout service.
  *
@@ -140,7 +141,7 @@ export function closeCheck(orderId: string, input: CloseInput, actor: SessionUse
 
   const storedExposure = offlineExposure();
   const offlineTenders = tenders.filter((tender) => tender.method === "card" && tender.authCode?.startsWith("OFFLINE"));
-  if (offlineTenders.length && !settings.offlinePaymentsEnabled) {
+  if (offlineTenders.length && (!isDemoMode() || !settings.offlinePaymentsEnabled)) {
     throw badRequest("Offline card approvals are disabled in Order Workflow settings");
   }
   const offlineAmount = offlineTenders.reduce((total, tender) => total + tender.amount, 0);
@@ -309,6 +310,7 @@ function normalizeMethod(method: string): TenderMethod {
 
 /** Forward a store-and-forward authorisation once connectivity is restored. */
 export function forwardStoredPayments(actor: SessionUser | null): { forwarded: number } {
+  if (!isDemoMode()) throw badRequest("Payment gateway forwarding is not configured. Reconcile stored payments with your provider.");
   const rows = all<{ id: string; amount: number }>("SELECT id, amount FROM payments WHERE status = 'stored'");
   tx(() => {
     for (const row of rows) run("UPDATE payments SET status = 'captured' WHERE id = ?", row.id);

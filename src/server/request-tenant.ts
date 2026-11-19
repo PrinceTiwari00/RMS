@@ -6,9 +6,9 @@
  * is ordered from most to least authoritative:
  *
  *   1. the signed tenant id inside the staff session (cannot be forged),
- *   2. the `rms_tenant` convenience cookie (guest pages, CFD),
- *   3. an explicit `?tenant=<code>` query parameter,
- *   4. the guest QR token in the path,
+ *   2. the guest QR token in the path,
+ *   3. an explicit `?tenant=<code>` query or body parameter,
+ *   4. the `rms_tenant` convenience cookie (guest pages, CFD),
  *   5. the only active restaurant, when the deployment has exactly one.
  */
 import { cookies } from "next/headers";
@@ -43,13 +43,12 @@ export function resolveRequestTenant(input: {
   const session = input.session ?? readSession(input.jar);
   if (session?.tenantId) {
     const tenant = getTenantById(session.tenantId);
-    if (tenant) return { tenant };
+    return tenant ? { tenant } : { tenant: null, reason: "unknown-tenant" };
   }
 
-  const cookieCode = input.jar.get(TENANT_COOKIE)?.value;
-  if (cookieCode) {
-    const tenant = getTenantByCode(cookieCode);
-    if (tenant) return { tenant };
+  if (input.segments[0] === "guest" && input.segments[1]) {
+    const tenant = findTenantByGuestToken(input.segments[1]);
+    return tenant ? { tenant } : { tenant: null, reason: "unknown-token" };
   }
 
   const queryCode = input.query.get("tenant");
@@ -64,9 +63,10 @@ export function resolveRequestTenant(input: {
     if (tenant) return { tenant };
   }
 
-  if (input.segments[0] === "guest" && input.segments[1]) {
-    const tenant = findTenantByGuestToken(input.segments[1]);
-    return tenant ? { tenant } : { tenant: null, reason: "unknown-token" };
+  const cookieCode = input.jar.get(TENANT_COOKIE)?.value;
+  if (cookieCode) {
+    const tenant = getTenantByCode(cookieCode);
+    if (tenant) return { tenant };
   }
 
   const single = singleActiveTenant();
@@ -93,7 +93,7 @@ export async function currentStaffContext(): Promise<StaffContext | null> {
 
   const resolution = resolveRequestTenant({ segments: [], query: new URLSearchParams(), jar: readable, session });
   const tenant = resolution.tenant;
-  if (!tenant) return null;
+  if (!tenant || tenant.status !== "active") return null;
 
   const user = withTenant(tenantScope(tenant), () => loadUser(session.uid));
   if (!user) return null;
@@ -104,7 +104,7 @@ export async function currentStaffContext(): Promise<StaffContext | null> {
 export function resolvePublicTenant(token?: string): Tenant | null {
   if (token) {
     const tenant = findTenantByGuestToken(token);
-    if (tenant) return tenant;
+    return tenant;
   }
   return singleActiveTenant();
 }

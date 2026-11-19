@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { api, errorMessage } from "@/lib/api";
+import { api, ApiError, errorMessage } from "@/lib/api";
 import { can, type Permission } from "@/domain/permissions";
 import type { BootstrapState, SessionUser } from "@/types";
 
@@ -51,6 +51,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setError(null);
     } catch (caught) {
       setError(errorMessage(caught));
+      if (caught instanceof ApiError && caught.status === 401) setState(null);
     } finally {
       setLoading(false);
     }

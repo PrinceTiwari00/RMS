@@ -12,7 +12,7 @@ import { buildBootstrap, buildMetrics } from "@/server/state";
 import { getRawSettings, getSettings, getStations, setSettings } from "@/server/settings";
 import { bool, q, qInt, required } from "@/server/coerce";
 import { routeTable } from "@/server/router";
-import { CSRF_COOKIE, SESSION_COOKIE, issueToken, newCsrfToken, isProduction } from "@/lib/session";
+import { CSRF_COOKIE, SESSION_COOKIE, issueToken, newCsrfToken, isProduction, isDemoMode } from "@/lib/session";
 import { TENANT_COOKIE } from "@/lib/session-keys";
 import { audit } from "@/server/audit";
 import { DENOMINATIONS, rangePresets } from "@/server/reports";
@@ -82,7 +82,7 @@ publicRoute("POST", "session/signin", ({ body, ip }) => {
   const response = NextResponse.json({
     user,
     csrfToken: csrf,
-    demoMode: !isProduction(),
+    demoMode: isDemoMode(),
     tenant: { id: tenant.id, code: tenant.code, name: tenant.name, tagline: tenant.tagline },
   });
   response.cookies.set(SESSION_COOKIE, token, { ...COOKIE_BASE, maxAge: 60 * 60 * 12 });
@@ -107,7 +107,7 @@ publicRoute("POST", "session/signout", ({ anonymous }) => {
 publicRoute("GET", "session", () => ({
   user: null,
   csrfToken: null,
-  demoMode: !isProduction(),
+  demoMode: isDemoMode(),
   // "Setup required" now means the platform has no super admin yet; individual
   // restaurants are created from the platform console, not from `/setup`.
   setupRequired: platformSetupRequired() && countTenants() === 0,
@@ -121,7 +121,7 @@ publicRoute("GET", "session", () => ({
  * and is scoped to the selected restaurant.
  */
 publicRoute("GET", "session/demo-pins", ({ query }) => {
-  if (isProduction()) return { staff: [], demoMode: false };
+  if (!isDemoMode()) return { staff: [], demoMode: false };
   const code = q(query, "restaurant");
   const tenant = code ? getTenantByCode(code) : singleActiveTenant();
   if (!tenant) return { staff: [], demoMode: true };
