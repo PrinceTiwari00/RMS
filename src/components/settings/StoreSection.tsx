@@ -119,6 +119,34 @@ export function StoreSection({ draft, onChange, onChangeMany, canEdit }: Setting
               className="sm:col-span-2"
               disabled={!canEdit}
             />
+            <TextField
+              label="Guest Wi-Fi network (SSID)"
+              value={draft.wifi_ssid ?? ""}
+              onChange={(value) => onChange("wifi_ssid", value)}
+              placeholder="Restaurant_Guest"
+              disabled={!canEdit}
+            />
+            <TextField
+              label="Guest Wi-Fi password"
+              value={draft.wifi_password ?? ""}
+              onChange={(value) => onChange("wifi_password", value)}
+              placeholder="welcome2026"
+              disabled={!canEdit}
+            />
+            <TextField
+              label="Loyalty reward milestone"
+              value={draft.loyalty_reward_name ?? ""}
+              onChange={(value) => onChange("loyalty_reward_name", value)}
+              placeholder="Free Mango Lassi"
+              disabled={!canEdit}
+            />
+            <TextField
+              label="Points needed to redeem"
+              type="number"
+              value={draft.loyalty_reward_points ?? "200"}
+              onChange={(value) => onChange("loyalty_reward_points", value)}
+              disabled={!canEdit}
+            />
           </div>
         </Panel>
 

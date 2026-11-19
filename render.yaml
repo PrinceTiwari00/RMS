@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: rms
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    disk:
+      name: rms-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RMS_ENV
+        value: production
+      - key: RMS_DATA_DIR
+        value: /var/data
+      - key: RMS_SECRET_KEY
+        generateValue: true
+      - key: RMS_SETUP_TOKEN
+        generateValue: true
+      - key: RMS_TENANT_DIRECTORY
+        value: "1"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"

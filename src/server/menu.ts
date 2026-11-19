@@ -32,6 +32,9 @@ interface ItemRow {
   station: string;
   allergens: string;
   prep_minutes: number;
+  spice_level: number;
+  upsell_item_id: string | null;
+  upsell_discount_percent: number;
   emoji: string;
   is_available: number;
   is_featured: number;
@@ -113,29 +116,64 @@ export function getMenu(options: { includeUnavailable?: boolean; onlyAvailable?:
     groupsByItem.set(group.menu_item_id, list);
   }
 
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  const defaultDrink = rows.find((row) => row.is_available && row.course === "drink" && /lassi|chiya|soda|coffee/i.test(row.name))
+    ?? rows.find((row) => row.is_available && row.course === "drink");
+
   return rows
     .filter((row) => (options.onlyAvailable ? Boolean(row.is_available) : true))
-    .map((row) => ({
-      id: row.id,
-      categoryId: row.category_id,
-      categoryName: row.category_name ?? "Uncategorised",
-      name: row.name,
-      description: row.description,
-      price: row.price,
-      cost: row.cost,
-      course: row.course as MenuItem["course"],
-      station: row.station,
-      allergens: row.allergens,
-      prepMinutes: row.prep_minutes,
-      emoji: row.emoji,
-      isAvailable: Boolean(row.is_available),
-      isFeatured: Boolean(row.is_featured),
-      sortOrder: row.sort_order,
-      groups: groupsByItem.get(row.id) ?? [],
-      marginPercent: grossMarginPercent({ price: row.price, cost: row.cost }),
-      foodCostPercent: foodCostPercent({ price: row.price, cost: row.cost }),
-      unitsSold: Number(row.units_sold ?? 0),
-    }));
+    .map((row) => {
+      const itemGroups = groupsByItem.get(row.id) ?? [];
+      const explicitSpice = Number(row.spice_level ?? 0);
+      const inferredSpice = explicitSpice > 0
+        ? explicitSpice
+        : itemGroups.some((g) => /spice/i.test(g.name)) || /chilli|schezwan|spicy|tikka|curry|tandoori|makhani/i.test(`${row.name} ${row.description}`)
+          ? 2
+          : 0;
+      const explicitUpsell = row.upsell_item_id ? rowsById.get(row.upsell_item_id) : undefined;
+      const resolvedUpsell = explicitUpsell && explicitUpsell.is_available && explicitUpsell.id !== row.id
+        ? explicitUpsell
+        : row.course !== "drink" && defaultDrink && defaultDrink.id !== row.id
+          ? defaultDrink
+          : undefined;
+      const discountPct = Math.max(0, Math.min(80, Number(row.upsell_discount_percent ?? 20)));
+      const upsellItem = resolvedUpsell
+        ? {
+            id: resolvedUpsell.id,
+            name: resolvedUpsell.name,
+            emoji: resolvedUpsell.emoji,
+            price: resolvedUpsell.price,
+            discountedPrice: Math.round((resolvedUpsell.price * (100 - discountPct)) / 100),
+            discountPercent: discountPct,
+          }
+        : null;
+
+      return {
+        id: row.id,
+        categoryId: row.category_id,
+        categoryName: row.category_name ?? "Uncategorised",
+        name: row.name,
+        description: row.description,
+        price: row.price,
+        cost: row.cost,
+        course: row.course as MenuItem["course"],
+        station: row.station,
+        allergens: row.allergens,
+        prepMinutes: row.prep_minutes,
+        spiceLevel: inferredSpice,
+        upsellItemId: row.upsell_item_id ?? null,
+        upsellDiscountPercent: discountPct,
+        upsellItem,
+        emoji: row.emoji,
+        isAvailable: Boolean(row.is_available),
+        isFeatured: Boolean(row.is_featured),
+        sortOrder: row.sort_order,
+        groups: itemGroups,
+        marginPercent: grossMarginPercent({ price: row.price, cost: row.cost }),
+        foodCostPercent: foodCostPercent({ price: row.price, cost: row.cost }),
+        unitsSold: Number(row.units_sold ?? 0),
+      };
+    });
 }
 
 export function getMenuItem(id: string): MenuItem | undefined {
@@ -204,6 +242,9 @@ export interface MenuItemInput {
   station?: string;
   allergens?: string;
   prepMinutes?: number;
+  spiceLevel?: number;
+  upsellItemId?: string | null;
+  upsellDiscountPercent?: number;
   emoji?: string;
   isAvailable?: boolean;
   isFeatured?: boolean;
@@ -218,8 +259,8 @@ export function createMenuItem(input: MenuItemInput): MenuItem {
   const sortOrder = Number(scalarMax("SELECT MAX(sort_order) FROM menu_items") ?? -1) + 1;
   run(
     `INSERT INTO menu_items (id, category_id, name, description, price, cost, course, station, allergens,
-       prep_minutes, emoji, is_available, is_featured, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       prep_minutes, spice_level, upsell_item_id, upsell_discount_percent, emoji, is_available, is_featured, sort_order, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.categoryId ?? null,
     name,
@@ -229,6 +270,9 @@ export function createMenuItem(input: MenuItemInput): MenuItem {
     input.station ?? "grill",
     input.allergens ?? "",
     Math.max(1, Math.round(Number(input.prepMinutes ?? 10))),
+    Math.max(0, Math.min(3, Math.round(Number(input.spiceLevel ?? 0)))),
+    input.upsellItemId ?? null,
+    Math.max(0, Math.min(80, Math.round(Number(input.upsellDiscountPercent ?? 20)))),
     input.emoji ?? "🍽",
     input.isAvailable === false ? 0 : 1,
     input.isFeatured ? 1 : 0,
@@ -245,7 +289,7 @@ export function updateMenuItem(id: string, patch: MenuItemInput): MenuItem {
   if (!existing) throw notFound("Menu item not found");
   run(
     `UPDATE menu_items SET name = ?, category_id = ?, description = ?, price = ?, course = ?, station = ?,
-       allergens = ?, prep_minutes = ?, emoji = ?, is_available = ?, is_featured = ?, updated_at = ?
+       allergens = ?, prep_minutes = ?, spice_level = ?, upsell_item_id = ?, upsell_discount_percent = ?, emoji = ?, is_available = ?, is_featured = ?, updated_at = ?
      WHERE id = ?`,
     patch.name ?? existing.name,
     patch.categoryId !== undefined ? patch.categoryId : existing.category_id,
@@ -255,6 +299,11 @@ export function updateMenuItem(id: string, patch: MenuItemInput): MenuItem {
     patch.station ?? existing.station,
     patch.allergens ?? existing.allergens,
     patch.prepMinutes !== undefined ? Math.max(1, Math.round(Number(patch.prepMinutes))) : existing.prep_minutes,
+    patch.spiceLevel !== undefined ? Math.max(0, Math.min(3, Math.round(Number(patch.spiceLevel)))) : existing.spice_level,
+    patch.upsellItemId !== undefined ? patch.upsellItemId : existing.upsell_item_id,
+    patch.upsellDiscountPercent !== undefined
+      ? Math.max(0, Math.min(80, Math.round(Number(patch.upsellDiscountPercent))))
+      : existing.upsell_discount_percent,
     patch.emoji ?? existing.emoji,
     patch.isAvailable === undefined ? existing.is_available : patch.isAvailable ? 1 : 0,
     patch.isFeatured === undefined ? existing.is_featured : patch.isFeatured ? 1 : 0,

@@ -8,6 +8,7 @@
 import { route, badRequest } from "@/server/router";
 import {
   bumpTicket,
+  getAllStationsBoard,
   getExpoView,
   getPrepSheetForItem,
   getPrepSheets,
@@ -27,6 +28,12 @@ route("GET", "kds/stations", null, () => ({ stations: getStations() }));
 
 /** Board-wide counters. Registered before `kds/:station` so the literal wins. */
 route("GET", "kds/metrics", "kds.view", () => metrics());
+
+/** Multi-column KDS view showing all station lanes side-by-side. */
+route("GET", "kds/all", "kds.view", () => ({
+  ...getAllStationsBoard(),
+  serverTime: new Date().toISOString(),
+}));
 
 /** Colour band for a given elapsed time — used by the timer legends. */
 route("GET", "kds/urgency", "kds.view", ({ query }) => {

@@ -629,6 +629,33 @@ function seedMenu(categories: Map<string, string>): Map<string, { id: string; na
   // manager. Mutton (bone-in) is at zero stock, which is why the curry is off.
   const soldOut = items.get("Mutton Curry");
   if (soldOut) run("UPDATE menu_items SET is_available = 0 WHERE id = ?", soldOut.id);
+
+  // Set spice indicators and contextual 1-tap pairing upsell deals.
+  const pairings: [string, number, string | null, number][] = [
+    ["Chicken Momo (Steamed)", 1, "Mango Lassi", 20],
+    ["Fried Momo", 1, "Fresh Lime Soda", 20],
+    ["Chilli Chicken", 3, "Fresh Lime Soda", 20],
+    ["Chicken Wings", 2, "Nepal Lager", 15],
+    ["Tandoori Chicken (Half)", 2, "Butter Naan", 25],
+    ["Butter Chicken", 1, "Butter Naan", 25],
+    ["Thakali Set (Chicken)", 2, "Mango Lassi", 20],
+    ["Mixed Schezwan Noodles", 3, "Cold Coffee", 20],
+    ["Chicken Tikka Pizza", 2, "Soft Drink", 20],
+    ["House Burger", 1, "Crispy Fries", 20],
+  ];
+  for (const [dishName, spice, pairName, discount] of pairings) {
+    const dish = items.get(dishName);
+    const pair = pairName ? items.get(pairName) : undefined;
+    if (dish) {
+      run(
+        "UPDATE menu_items SET spice_level = ?, upsell_item_id = ?, upsell_discount_percent = ? WHERE id = ?",
+        spice,
+        pair?.id ?? null,
+        pair ? discount : 0,
+        dish.id,
+      );
+    }
+  }
   return items;
 }
 

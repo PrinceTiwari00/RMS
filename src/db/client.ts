@@ -277,7 +277,24 @@ function readSchema(fileName: string): string {
 /** Idempotent schema creation for the active restaurant, safe on every cold start. */
 export function migrate(): void {
   if (!schemaCache.sql) schemaCache.sql = readSchema("schema.sql");
-  db().exec(schemaCache.sql);
+  const connection = db();
+  connection.exec(schemaCache.sql);
+  // Safe additive column migrations for pre-existing tenant/demo SQLite files.
+  ensureColumn(connection, "menu_items", "spice_level", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(connection, "menu_items", "upsell_item_id", "TEXT");
+  ensureColumn(connection, "menu_items", "upsell_discount_percent", "INTEGER NOT NULL DEFAULT 20");
+  ensureColumn(connection, "orders", "session_id", "TEXT");
+  ensureColumn(connection, "orders", "guest_id", "TEXT");
+  ensureColumn(connection, "orders", "approval_status", "TEXT NOT NULL DEFAULT 'approved'");
+  ensureColumn(connection, "orders", "approved_at", "TEXT");
+  ensureColumn(connection, "orders", "approved_by", "TEXT");
+}
+
+function ensureColumn(connection: DatabaseSync, table: string, column: string, definition: string): void {
+  const cols = connection.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((col) => col.name === column)) {
+    connection.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 /** Idempotent schema creation for the platform/control database. */

@@ -22,6 +22,11 @@ import {
 import { arr, num, q, qInt, str } from "@/server/coerce";
 import { businessDateNow, shiftDate, today } from "@/domain/time";
 import { getSettings } from "@/server/settings";
+import { buildMetrics } from "@/server/state";
+import { floorStats, getTables } from "@/server/floor";
+import { getActiveOrders } from "@/server/orders";
+import { metrics as kdsMetrics } from "@/server/kitchen";
+import { getActiveServiceRequests, getRecentReviews } from "@/server/engagement";
 
 /** Resolve a preset id or an explicit from/to pair. */
 function resolveRange(query: URLSearchParams): { from: string; to: string; preset: string } {
@@ -32,6 +37,20 @@ function resolveRange(query: URLSearchParams): { from: string; to: string; prese
 }
 
 route("GET", "reports/ranges", null, () => ({ ranges: rangePresets(), today: today() }));
+
+route("GET", "overview", null, () => {
+  const activeOrders = getActiveOrders();
+  return {
+    metrics: buildMetrics(),
+    floor: floorStats(),
+    tables: getTables(),
+    pendingQrOrders: activeOrders.filter((order) => order.approvalStatus === "pending_staff"),
+    activeOrders,
+    serviceRequests: getActiveServiceRequests(),
+    kds: kdsMetrics(),
+    reviews: getRecentReviews(8),
+  };
+});
 
 route("GET", "reports/executive", "reports.executive", ({ query }) => {
   const { from, to, preset } = resolveRange(query);

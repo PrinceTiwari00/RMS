@@ -117,6 +117,13 @@ export function WorkflowSection({ draft, onChange, onChangeMany, canEdit }: Sett
               disabled={!canEdit}
             />
             <ToggleRow
+              title="Staff approval for QR orders"
+              description="Hold QR guest orders in the staff queue until a server confirms and sends them to the kitchen."
+              checked={boolValue(draft.qr_require_staff_approval, true)}
+              onChange={(value) => onChange("qr_require_staff_approval", value)}
+              disabled={!canEdit || !boolValue(draft.qr_ordering_enabled, true)}
+            />
+            <ToggleRow
               title="Customer-facing display"
               description="Show the live ticket, promotions and payment QR on the guest display."
               checked={boolValue(draft.cfd_enabled, true)}

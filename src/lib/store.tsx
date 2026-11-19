@@ -169,3 +169,50 @@ export function useTicker(intervalMs = 15000): Date {
   }, [intervalMs]);
   return now;
 }
+
+/**
+ * Subscribe to real-time SSE events from `/api/events/stream`.
+ * Automatically triggers `onEvent` whenever matching events arrive, while
+ * `usePoll` remains as a resilient fallback.
+ */
+export function useLiveEvents(
+  onEvent: (event: { type: string; tableId?: string | null; station?: string | null; matchId?: string | null }) => void,
+  options: { token?: string; station?: string; enabled?: boolean } = {},
+): boolean {
+  const { token, station, enabled = true } = options;
+  const [connected, setConnected] = useState(false);
+  const handlerRef = useRef(onEvent);
+  handlerRef.current = onEvent;
+
+  useEffect(() => {
+    if (!enabled || typeof EventSource === "undefined") return;
+    const params = new URLSearchParams();
+    if (token) params.set("token", token);
+    if (station) params.set("station", station);
+    const url = `/api/events/stream${params.toString() ? `?${params.toString()}` : ""}`;
+    const source = new EventSource(url);
+
+    source.addEventListener("connected", () => setConnected(true));
+    source.addEventListener("rms", (msg) => {
+      try {
+        const parsed = JSON.parse((msg as MessageEvent).data) as {
+          type: string;
+          tableId?: string | null;
+          station?: string | null;
+          matchId?: string | null;
+        };
+        handlerRef.current(parsed);
+      } catch {
+        /* ignore malformed event */
+      }
+    });
+    source.onerror = () => setConnected(false);
+
+    return () => {
+      setConnected(false);
+      source.close();
+    };
+  }, [token, station, enabled]);
+
+  return connected;
+}

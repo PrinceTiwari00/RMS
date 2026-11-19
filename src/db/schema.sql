@@ -83,14 +83,17 @@ CREATE TABLE IF NOT EXISTS menu_items (
   cost         INTEGER NOT NULL DEFAULT 0,     -- paisa, target portion cost
   course       TEXT NOT NULL DEFAULT 'entree', -- appetizer | entree | drink | dessert
   station      TEXT NOT NULL DEFAULT 'grill',
-  allergens    TEXT NOT NULL DEFAULT '',
-  prep_minutes INTEGER NOT NULL DEFAULT 8,
-  emoji        TEXT NOT NULL DEFAULT '🍽',
-  is_available INTEGER NOT NULL DEFAULT 1,     -- 0 == "86ed"
-  is_featured  INTEGER NOT NULL DEFAULT 0,
-  sort_order   INTEGER NOT NULL DEFAULT 0,
-  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  allergens               TEXT NOT NULL DEFAULT '',
+  prep_minutes            INTEGER NOT NULL DEFAULT 8,
+  spice_level             INTEGER NOT NULL DEFAULT 0,   -- 0=none, 1=mild, 2=medium, 3=hot
+  upsell_item_id          TEXT,
+  upsell_discount_percent INTEGER NOT NULL DEFAULT 20,
+  emoji                   TEXT NOT NULL DEFAULT '🍽',
+  is_available            INTEGER NOT NULL DEFAULT 1,   -- 0 == "86ed"
+  is_featured             INTEGER NOT NULL DEFAULT 0,
+  sort_order              INTEGER NOT NULL DEFAULT 0,
+  created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_menu_category ON menu_items(category_id, sort_order);
 
@@ -170,6 +173,11 @@ CREATE TABLE IF NOT EXISTS orders (
   tip            INTEGER NOT NULL DEFAULT 0,
   total          INTEGER NOT NULL DEFAULT 0,
   qr_token       TEXT,
+  session_id     TEXT,
+  guest_id       TEXT,
+  approval_status TEXT NOT NULL DEFAULT 'approved', -- pending_staff|approved
+  approved_at    TEXT,
+  approved_by    TEXT,
   guest_name     TEXT NOT NULL DEFAULT '',
   note           TEXT NOT NULL DEFAULT '',
   business_date  TEXT,
@@ -512,4 +520,128 @@ CREATE TABLE IF NOT EXISTS qr_tokens (
   is_active  INTEGER NOT NULL DEFAULT 1,
   scans      INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ======================================= TABLE SESSIONS, ENGAGEMENT & REVIEWS
+CREATE TABLE IF NOT EXISTS table_sessions (
+  id         TEXT PRIMARY KEY,
+  table_id   TEXT NOT NULL REFERENCES tables(id) ON DELETE CASCADE,
+  qr_token   TEXT,
+  status     TEXT NOT NULL DEFAULT 'active',  -- active|closed
+  opened_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  closed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_table_sessions_table ON table_sessions(table_id, status);
+
+CREATE TABLE IF NOT EXISTS table_guests (
+  id                 TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL REFERENCES table_sessions(id) ON DELETE CASCADE,
+  name               TEXT NOT NULL,
+  initials           TEXT NOT NULL DEFAULT 'G',
+  color              TEXT NOT NULL DEFAULT '#e85a2a',
+  loyalty_account_id TEXT,
+  joined_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_table_guests_session ON table_guests(session_id);
+
+CREATE TABLE IF NOT EXISTS service_requests (
+  id                 TEXT PRIMARY KEY,
+  table_id           TEXT NOT NULL REFERENCES tables(id) ON DELETE CASCADE,
+  session_id         TEXT REFERENCES table_sessions(id) ON DELETE SET NULL,
+  guest_id           TEXT,
+  guest_name         TEXT NOT NULL DEFAULT '',
+  request_type       TEXT NOT NULL DEFAULT 'call_waiter', -- call_waiter|water|napkins|bill|cutlery|other
+  note               TEXT NOT NULL DEFAULT '',
+  status             TEXT NOT NULL DEFAULT 'open',        -- open|acknowledged|resolved
+  assigned_waiter_id TEXT REFERENCES employees(id) ON DELETE SET NULL,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  acknowledged_at    TEXT,
+  resolved_at        TEXT,
+  resolved_by        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_service_requests_status ON service_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_service_requests_table ON service_requests(table_id, status);
+
+CREATE TABLE IF NOT EXISTS guest_reviews (
+  id         TEXT PRIMARY KEY,
+  order_id   TEXT REFERENCES orders(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES table_sessions(id) ON DELETE SET NULL,
+  table_id   TEXT REFERENCES tables(id) ON DELETE SET NULL,
+  guest_name TEXT NOT NULL DEFAULT '',
+  rating     INTEGER NOT NULL,
+  tags       TEXT NOT NULL DEFAULT '',
+  comment    TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_guest_reviews_order ON guest_reviews(order_id);
+
+CREATE TABLE IF NOT EXISTS loyalty_accounts (
+  id              TEXT PRIMARY KEY,
+  phone           TEXT NOT NULL DEFAULT '',
+  email           TEXT NOT NULL DEFAULT '',
+  name            TEXT NOT NULL DEFAULT '',
+  points          INTEGER NOT NULL DEFAULT 0,
+  lifetime_points INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_loyalty_phone ON loyalty_accounts(phone);
+CREATE INDEX IF NOT EXISTS idx_loyalty_email ON loyalty_accounts(email);
+
+CREATE TABLE IF NOT EXISTS loyalty_ledger (
+  id           TEXT PRIMARY KEY,
+  account_id   TEXT NOT NULL REFERENCES loyalty_accounts(id) ON DELETE CASCADE,
+  order_id     TEXT REFERENCES orders(id) ON DELETE SET NULL,
+  points_delta INTEGER NOT NULL,
+  reason       TEXT NOT NULL DEFAULT '',
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS email_receipts (
+  id              TEXT PRIMARY KEY,
+  order_id        TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  recipient_email TEXT NOT NULL,
+  subject         TEXT NOT NULL,
+  html_body       TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'sent', -- sent|queued|demo
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS quiz_matches (
+  id                  TEXT PRIMARY KEY,
+  mode                TEXT NOT NULL DEFAULT 'in_table', -- in_table|table_vs_table
+  session_id          TEXT REFERENCES table_sessions(id) ON DELETE SET NULL,
+  challenger_table_id TEXT REFERENCES tables(id) ON DELETE SET NULL,
+  opponent_table_id   TEXT REFERENCES tables(id) ON DELETE SET NULL,
+  status              TEXT NOT NULL DEFAULT 'active',   -- waiting|active|finished
+  current_round       INTEGER NOT NULL DEFAULT 1,
+  total_rounds        INTEGER NOT NULL DEFAULT 5,
+  question_ids        TEXT NOT NULL DEFAULT '[]',
+  round_started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS quiz_participants (
+  id           TEXT PRIMARY KEY,
+  match_id     TEXT NOT NULL REFERENCES quiz_matches(id) ON DELETE CASCADE,
+  guest_id     TEXT,
+  table_id     TEXT REFERENCES tables(id) ON DELETE SET NULL,
+  display_name TEXT NOT NULL,
+  avatar_color TEXT NOT NULL DEFAULT '#e85a2a',
+  score        INTEGER NOT NULL DEFAULT 0,
+  joined_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_quiz_participants_match ON quiz_participants(match_id);
+
+CREATE TABLE IF NOT EXISTS quiz_answers (
+  id             TEXT PRIMARY KEY,
+  match_id       TEXT NOT NULL REFERENCES quiz_matches(id) ON DELETE CASCADE,
+  round_number   INTEGER NOT NULL,
+  participant_id TEXT NOT NULL REFERENCES quiz_participants(id) ON DELETE CASCADE,
+  selected_index INTEGER NOT NULL,
+  is_correct     INTEGER NOT NULL DEFAULT 0,
+  points_earned  INTEGER NOT NULL DEFAULT 0,
+  answered_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(match_id, round_number, participant_id)
 );

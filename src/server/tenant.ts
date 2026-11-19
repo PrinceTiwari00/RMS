@@ -239,7 +239,15 @@ export function findTenantByGuestToken(token: string): Tenant | null {
   if (!token || token.length > 200) return null;
   for (const tenant of listTenants()) {
     try {
-      const found = runWithTenant(tenant, () => get<{ token: string }>("SELECT token FROM qr_tokens WHERE token = ?", token));
+      const found = runWithTenant(
+        tenant,
+        () =>
+          get<{ token: string }>("SELECT token FROM qr_tokens WHERE token = ?", token) ??
+          get<{ token: string }>(
+            "SELECT q.token FROM qr_tokens q JOIN tables t ON t.id = q.table_id WHERE LOWER(t.label) = LOWER(?) AND q.is_active = 1 LIMIT 1",
+            token,
+          ),
+      );
       if (found) return tenant;
     } catch {
       // A broken restaurant must not make guest ordering for others fail.

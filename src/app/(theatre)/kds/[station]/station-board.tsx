@@ -11,10 +11,10 @@
  * A line is a single tap to mark ready, and a tap again undoes a mistap — the
  * most common error on a KDS has to be the cheapest to fix.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, errorMessage } from "@/lib/api";
-import { usePoll, useStore, useTicker } from "@/lib/store";
+import { useLiveEvents, usePoll, useStore, useTicker } from "@/lib/store";
 import { Icon, toast } from "@/components/ui";
 import { COURSE_LABEL } from "@/domain/kds";
 import type { KdsMetrics, KdsTicket, OrderLine, StationInfo } from "@/types";
@@ -30,6 +30,21 @@ interface StationResponse {
   metrics: KdsMetrics;
 }
 
+interface AllStationsResponse {
+  stations: StationResponse[];
+  metrics: KdsMetrics;
+}
+
+function formatTimer(sentAt: string | null, minutesElapsed: number, _tick: number): string {
+  if (!sentAt) return `${String(minutesElapsed).padStart(2, "0")}:00`;
+  const parsed = Date.parse(sentAt.includes("T") ? sentAt : sentAt.replace(" ", "T") + "Z");
+  if (!Number.isFinite(parsed)) return `${String(minutesElapsed).padStart(2, "0")}:00`;
+  const diffSec = Math.max(0, Math.floor((Date.now() - parsed) / 1000));
+  const mm = String(Math.floor(diffSec / 60)).padStart(2, "0");
+  const ss = String(diffSec % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
 const URGENCY_LABEL: Record<string, string> = {
   hold: "On hold",
   ok: "Working",
@@ -40,24 +55,50 @@ const URGENCY_LABEL: Record<string, string> = {
 
 export function StationBoard({ station }: { station: string }) {
   const { state, allowed } = useStore();
+  const [tick, setTick] = useState(0);
   useTicker(10000);
 
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const isAll = station === "all";
   const canReady = allowed("kds.ready");
-  const { data } = usePoll<StationResponse>(`kds/${station}`, { interval: 2000 });
+  const singlePoll = usePoll<StationResponse>(isAll ? null : `kds/${station}`, { interval: 2500 });
+  const allPoll = usePoll<AllStationsResponse>(isAll ? "kds/all" : null, { interval: 2500 });
   const [busyLine, setBusyLine] = useState<string | null>(null);
 
+  useLiveEvents(
+    (ev) => {
+      if (ev.type === "kds.updated" || ev.type === "order.updated") {
+        if (isAll) void allPoll.reload();
+        else void singlePoll.reload();
+      }
+    },
+    { enabled: Boolean(state?.tenant) },
+  );
+
+  const data = singlePoll.data;
+  const allData = allPoll.data;
   const stations = state?.stations ?? [];
   const tickets = data?.tickets ?? [];
 
   /** Per-station live counts, so the tabs show load without another request. */
   const loadByStation = useMemo(() => {
     const map = new Map<string, KdsMetrics["byStation"][number]>();
-    for (const entry of data?.metrics.byStation ?? []) map.set(entry.station.id, entry);
+    const list = (isAll ? allData?.metrics.byStation : data?.metrics.byStation) ?? [];
+    for (const entry of list) map.set(entry.station.id, entry);
     return map;
-  }, [data]);
+  }, [isAll, allData, data]);
 
   const working = tickets.filter((ticket) => !ticket.allReady);
   const done = tickets.filter((ticket) => ticket.allReady);
+
+  const reloadCurrent = useCallback(() => {
+    if (isAll) void allPoll.reload();
+    else void singlePoll.reload();
+  }, [isAll, allPoll, singlePoll]);
 
   const toggleLine = useCallback(
     async (line: OrderLine) => {
@@ -70,34 +111,54 @@ export function StationBoard({ station }: { station: string }) {
           const result = await api.post<{ allReady: boolean }>(`kds/lines/${line.id}/ready`, {});
           if (result.allReady) toast(`Ticket ready for the pass`, "ok");
         }
+        reloadCurrent();
       } catch (error) {
         toast(errorMessage(error), "late");
       } finally {
         setBusyLine(null);
       }
     },
-    [],
+    [reloadCurrent],
   );
 
   const readyAll = useCallback(async (ticket: KdsTicket) => {
     try {
       const result = await api.post<{ marked: number; allReady: boolean }>(`kds/orders/${ticket.orderId}/ready-all`, {});
       toast(`${result.marked} item(s) marked ready`, "ok");
+      reloadCurrent();
     } catch (error) {
       toast(errorMessage(error), "late");
     }
-  }, []);
+  }, [reloadCurrent]);
+
+  const metricsSource = isAll ? allData?.metrics : data?.metrics;
 
   return (
     <div className="flex min-h-screen flex-col bg-stage text-stage-ink">
       {/* ------------------------------------------------------------- station bar */}
       <header className="flex flex-wrap items-center gap-2 border-b border-stage-rule bg-stage-raised px-3 py-2">
         <div className="flex items-center gap-2">
-          <span className="size-3 rounded-full" style={{ background: data?.station.color ?? "var(--color-brand-500)" }} />
-          <h1 className="text-lg font-black uppercase tracking-wide">{data?.station.name ?? station}</h1>
+          <span
+            className="size-3 rounded-full"
+            style={{ background: isAll ? "var(--color-ember-500)" : (data?.station.color ?? "var(--color-brand-500)") }}
+          />
+          <h1 className="text-lg font-black uppercase tracking-wide">
+            {isAll ? "KITCHEN DISPLAY · ALL STATIONS" : (data?.station.name ?? station)}
+          </h1>
         </div>
 
         <nav className="flex flex-wrap gap-1" aria-label="Kitchen stations">
+          <Link
+            href="/kds/all"
+            className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-extrabold uppercase tracking-wide transition-colors"
+            style={{
+              background: isAll ? "var(--color-ember-500)" : "var(--color-stage-card)",
+              color: isAll ? "#fff" : "var(--color-stage-soft)",
+              border: `1px solid ${isAll ? "var(--color-ember-500)" : "var(--color-stage-rule)"}`,
+            }}
+          >
+            All stations
+          </Link>
           {stations.map((entry) => {
             const load = loadByStation.get(entry.id);
             const active = entry.id === station;
@@ -122,18 +183,27 @@ export function StationBoard({ station }: { station: string }) {
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
-          <Counter label="Pending" value={data?.pendingCount ?? 0} />
-          <Counter label="Hold" value={data?.holdCount ?? 0} tone="var(--color-stage-soft)" />
-          <Counter label="Ready" value={data?.readyCount ?? 0} tone="var(--color-ok)" />
-          <Counter
-            label="Oldest"
-            value={`${data?.oldestMinutes ?? 0}m`}
-            tone={(data?.oldestMinutes ?? 0) > 15 ? "var(--color-late)" : (data?.oldestMinutes ?? 0) > 8 ? "var(--color-warn)" : undefined}
-          />
-          {(data?.metrics.lateTickets ?? 0) > 0 && (
+          {!isAll ? (
+            <>
+              <Counter label="Pending" value={data?.pendingCount ?? 0} />
+              <Counter label="Hold" value={data?.holdCount ?? 0} tone="var(--color-stage-soft)" />
+              <Counter label="Ready" value={data?.readyCount ?? 0} tone="var(--color-ok)" />
+              <Counter
+                label="Oldest"
+                value={`${data?.oldestMinutes ?? 0}m`}
+                tone={(data?.oldestMinutes ?? 0) > 15 ? "var(--color-late)" : (data?.oldestMinutes ?? 0) > 8 ? "var(--color-warn)" : undefined}
+              />
+            </>
+          ) : (
+            <Counter
+              label="Active tickets"
+              value={allData?.stations.reduce((sum, s) => sum + s.tickets.length, 0) ?? 0}
+            />
+          )}
+          {(metricsSource?.lateTickets ?? 0) > 0 && (
             <span className="flex items-center gap-1.5 rounded-lg bg-late px-2.5 py-1.5 text-[12px] font-black uppercase text-white">
               <Icon name="alert" className="size-4" />
-              {data?.metrics.lateTickets} late
+              {metricsSource?.lateTickets} late
             </span>
           )}
         </div>
@@ -141,7 +211,40 @@ export function StationBoard({ station }: { station: string }) {
 
       {/* ------------------------------------------------------------------ rail */}
       <main className="scroll-y flex-1 p-3">
-        {tickets.length === 0 ? (
+        {isAll ? (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {(allData?.stations ?? []).map((col) => (
+              <section key={col.station.id} className="flex flex-col rounded-xl border border-stage-rule bg-stage-raised p-2.5">
+                <header className="mb-2.5 flex items-center justify-between border-b border-stage-rule pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="size-2.5 rounded-full" style={{ background: col.station.color }} />
+                    <h2 className="text-sm font-black uppercase tracking-wider">{col.station.name}</h2>
+                  </div>
+                  <span className="tnum rounded-full bg-stage-card px-2 py-0.5 text-[11px] font-bold text-stage-soft">
+                    {col.tickets.length}
+                  </span>
+                </header>
+                {col.tickets.length === 0 ? (
+                  <p className="py-8 text-center text-xs font-semibold text-stage-soft">Clear</p>
+                ) : (
+                  <div className="flex flex-col gap-2.5">
+                    {col.tickets.map((ticket) => (
+                      <TicketCard
+                        key={`${col.station.id}-${ticket.orderId}`}
+                        ticket={ticket}
+                        tick={tick}
+                        canReady={canReady}
+                        busyLine={busyLine}
+                        onToggleLine={toggleLine}
+                        onReadyAll={readyAll}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+            ))}
+          </div>
+        ) : tickets.length === 0 ? (
           <div className="flex h-[60vh] flex-col items-center justify-center gap-3 text-center">
             <span className="flex size-20 items-center justify-center rounded-full bg-stage-card text-stage-soft">
               <Icon name="check" className="size-10" />
@@ -159,6 +262,7 @@ export function StationBoard({ station }: { station: string }) {
                 <TicketCard
                   key={ticket.orderId}
                   ticket={ticket}
+                  tick={tick}
                   canReady={canReady}
                   busyLine={busyLine}
                   onToggleLine={toggleLine}
@@ -177,6 +281,7 @@ export function StationBoard({ station }: { station: string }) {
                     <TicketCard
                       key={ticket.orderId}
                       ticket={ticket}
+                      tick={tick}
                       canReady={canReady}
                       busyLine={busyLine}
                       onToggleLine={toggleLine}
@@ -206,12 +311,14 @@ function Counter({ label, value, tone }: { label: string; value: number | string
 
 function TicketCard({
   ticket,
+  tick,
   canReady,
   busyLine,
   onToggleLine,
   onReadyAll,
 }: {
   ticket: KdsTicket;
+  tick: number;
   canReady: boolean;
   busyLine: string | null;
   onToggleLine: (line: OrderLine) => void;
@@ -221,6 +328,7 @@ function TicketCard({
   const warn = ticket.urgency === "warn";
   const ready = ticket.allReady;
   const remaining = ticket.lines.filter((line) => line.kdsStatus !== "READY").length;
+  const timer = formatTimer(ticket.sentAt, ticket.minutesElapsed, tick);
 
   return (
     <article
@@ -244,11 +352,10 @@ function TicketCard({
 
         <div className="shrink-0 text-right">
           <p
-            className="tnum text-2xl font-black leading-none"
+            className="tnum text-xl font-black leading-none"
             style={{ color: late ? "var(--color-late)" : warn ? "var(--color-warn)" : "var(--color-stage-ink)" }}
           >
-            {ticket.minutesElapsed}
-            <span className="text-sm">m</span>
+            {timer}
           </p>
           <p
             className="text-[9px] font-black uppercase tracking-[0.08em]"

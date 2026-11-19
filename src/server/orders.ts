@@ -14,6 +14,7 @@ import { audit } from "@/server/audit";
 import { priceOrder, resolveDiscount } from "@/domain/pricing";
 import { canBump, initialKdsStatus, urgency } from "@/domain/kds";
 import { businessDateNow, elapsedMinutes, nowStamp } from "@/domain/time";
+import { emitEvent } from "@/server/events";
 import type { Course, KdsStatus } from "@/domain/kds";
 import type { OrderLine, OrderSnapshot, SessionUser, Tender } from "@/types";
 
@@ -36,6 +37,11 @@ interface OrderRow {
   tip: number;
   total: number;
   qr_token: string | null;
+  session_id: string | null;
+  guest_id: string | null;
+  approval_status: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
   guest_name: string;
   note: string;
   business_date: string | null;
@@ -205,6 +211,11 @@ export function buildSnapshot(row: OrderRow): OrderSnapshot {
     channel: row.channel as OrderSnapshot["channel"],
     guests: row.guests,
     qrToken: row.qr_token,
+    sessionId: row.session_id ?? null,
+    guestId: row.guest_id ?? null,
+    approvalStatus: row.approval_status === "pending_staff" ? "pending_staff" : "approved",
+    approvedAt: row.approved_at ?? null,
+    approvedBy: row.approved_by ?? null,
     guestName: row.guest_name,
     note: row.note,
     businessDate: row.business_date,
@@ -268,16 +279,20 @@ export interface CreateOrderInput {
   guestName?: string;
   note?: string;
   qrToken?: string | null;
+  sessionId?: string | null;
+  guestId?: string | null;
+  approvalStatus?: "pending_staff" | "approved";
 }
 
 export function createOrder(input: CreateOrderInput, actor?: SessionUser | null): OrderSnapshot {
   const channel = (ORDER_CHANNELS as readonly string[]).includes(input.channel ?? "") ? (input.channel as string) : "dine_in";
   const guests = Math.max(1, Math.round(Number(input.guests ?? 1)));
   const id = uuid();
+  const approvalStatus = input.approvalStatus === "pending_staff" ? "pending_staff" : "approved";
   run(
     `INSERT INTO orders (id, check_number, table_id, terminal_id, server_id, status, channel, guests,
-       qr_token, guest_name, note, business_date, created_at)
-     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)`,
+       qr_token, session_id, guest_id, approval_status, guest_name, note, business_date, created_at)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     nextCheckNumber(),
     input.tableId ?? null,
@@ -286,12 +301,17 @@ export function createOrder(input: CreateOrderInput, actor?: SessionUser | null)
     channel,
     guests,
     input.qrToken ?? null,
+    input.sessionId ?? null,
+    input.guestId ?? null,
+    approvalStatus,
     input.guestName ?? "",
     input.note ?? "",
     businessDateNow(),
     nowStamp(),
   );
-  return requireOrder(id);
+  const created = requireOrder(id);
+  emitEvent("order.created", { orderId: id, tableId: created.tableId, sessionId: created.sessionId });
+  return created;
 }
 
 export interface AddLineInput {
@@ -301,6 +321,7 @@ export interface AddLineInput {
   modifiers?: string[];
   note?: string;
   seat?: number;
+  holdForApproval?: boolean;
 }
 
 export function addLine(orderId: string, input: AddLineInput, actor?: SessionUser | null): OrderSnapshot {
@@ -325,10 +346,12 @@ export function addLine(orderId: string, input: AddLineInput, actor?: SessionUse
   const stamp = nowStamp();
 
   tx(() => {
+    const initialKds = input.holdForApproval ? "HOLD" : "PENDING";
+    const lineSentAt = input.holdForApproval ? null : order.sentAt ?? null;
     run(
       `INSERT INTO order_items (id, order_id, menu_item_id, name_snapshot, quantity, price_at_time, course,
          station, seat, note, kds_status, is_void, created_at, sent_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       lineId,
       orderId,
       item.id,
@@ -339,8 +362,9 @@ export function addLine(orderId: string, input: AddLineInput, actor?: SessionUse
       routedStation,
       Math.max(0, Math.round(Number(input.seat ?? 0))),
       String(input.note ?? "").slice(0, 280),
+      initialKds,
       stamp,
-      order.sentAt ?? null,
+      lineSentAt,
     );
     for (const modifier of resolved) {
       run(
@@ -354,14 +378,18 @@ export function addLine(orderId: string, input: AddLineInput, actor?: SessionUse
         modifier.price,
       );
     }
-    // A line added to a ticket that is already on the pass routes immediately
-    // (entrees wait for the next fire so the table still lands together).
-    if (order.sentAt) {
+    if (input.holdForApproval) {
+      run("UPDATE orders SET approval_status = 'pending_staff' WHERE id = ?", orderId);
+    } else if (order.sentAt) {
+      // A line added to a ticket that is already on the pass routes immediately
+      // (entrees wait for the next fire so the table still lands together).
       run("UPDATE order_items SET kds_status = ? WHERE id = ?", initialKdsStatus(item.course), lineId);
     }
   });
   void actor;
-  return requireOrder(orderId);
+  const updated = requireOrder(orderId);
+  emitEvent("order.updated", { orderId, tableId: updated.tableId, sessionId: updated.sessionId, station: routedStation });
+  return updated;
 }
 
 export function updateLine(
@@ -461,29 +489,82 @@ export function lineTotalOf(lineId: string): number {
   return (line.price_at_time + modifierTotal) * line.quantity;
 }
 
-/** Send the ticket to the kitchen: appetizers/drinks release, entrees hold. */
-export function sendToKitchen(orderId: string, actor: SessionUser | null): OrderSnapshot {
+/** Send the ticket to the kitchen: appetizers/drinks release, entrees hold (QR tickets fire all stations immediately). */
+export function sendToKitchen(orderId: string, actor: SessionUser | null, options: { fireAllCourses?: boolean } = {}): OrderSnapshot {
   const order = requireOrder(orderId);
   if (order.status !== "open") throw badRequest("Only an open ticket can be sent to the kitchen");
   if (!order.activeItems.length) throw badRequest("An empty ticket cannot be sent to the kitchen");
 
+  const fireAll = options.fireAllCourses ?? order.channel === "qr";
   const stamp = nowStamp();
   tx(() => {
-    const changed = run("UPDATE orders SET status = 'sent', sent_at = ? WHERE id = ? AND status = 'open'", stamp, orderId).changes;
+    const changed = run(
+      "UPDATE orders SET status = 'sent', sent_at = ?, approval_status = 'approved', approved_at = COALESCE(approved_at, ?), approved_by = COALESCE(approved_by, ?) WHERE id = ? AND status = 'open'",
+      stamp,
+      stamp,
+      actor?.id ?? null,
+      orderId,
+    ).changes;
     if (!changed) throw badRequest("That ticket has already been sent");
     for (const line of order.activeItems) {
+      const nextKds = fireAll ? "PENDING" : initialKdsStatus(line.course);
       run(
         "UPDATE order_items SET kds_status = ?, sent_at = COALESCE(sent_at, ?) WHERE id = ? AND kds_status = 'PENDING' AND sent_at IS NULL",
-        initialKdsStatus(line.course),
+        nextKds,
         stamp,
         line.id,
       );
     }
     // Any line added before the send but already stamped keeps its status.
     run("UPDATE order_items SET sent_at = COALESCE(sent_at, ?) WHERE order_id = ?", stamp, orderId);
+    if (order.tableId) {
+      run(
+        "UPDATE tables SET status = CASE WHEN status IN ('available','seated') THEN 'ordered' ELSE status END, seated_at = COALESCE(seated_at, ?) WHERE id = ?",
+        stamp,
+        order.tableId,
+      );
+    }
   });
   audit(actor, "pos.send", "order", orderId, `${order.activeItems.length} line(s) to the kitchen`);
-  return requireOrder(orderId);
+  const updated = requireOrder(orderId);
+  emitEvent("order.approved", { orderId, tableId: updated.tableId, sessionId: updated.sessionId });
+  emitEvent("kds.updated", { orderId, tableId: updated.tableId });
+  emitEvent("floor.updated", { tableId: updated.tableId });
+  return updated;
+}
+
+/**
+ * Staff Console approval for incoming QR / pending-staff orders.
+ * Handles both initial approval (open -> sent) and follow-up QR rounds on an already-sent ticket.
+ */
+export function approveOrder(orderId: string, actor: SessionUser | null): OrderSnapshot {
+  const order = requireOrder(orderId);
+  if (order.status === "closed" || order.status === "voided") {
+    throw badRequest("This order can no longer be sent to the kitchen");
+  }
+  if (order.status === "open") {
+    return sendToKitchen(orderId, actor, { fireAllCourses: true });
+  }
+  const stamp = nowStamp();
+  tx(() => {
+    run(
+      "UPDATE orders SET approval_status = 'approved', approved_at = ?, approved_by = ? WHERE id = ?",
+      stamp,
+      actor?.id ?? null,
+      orderId,
+    );
+    run(
+      "UPDATE order_items SET kds_status = 'PENDING', sent_at = COALESCE(sent_at, ?) WHERE order_id = ? AND kds_status = 'HOLD'",
+      stamp,
+      orderId,
+    );
+  });
+  audit(actor, "pos.approve", "order", orderId, `QR ticket #${order.checkNumber ?? ""} sent to kitchen`);
+  const updated = requireOrder(orderId);
+  emitEvent("order.approved", { orderId, tableId: updated.tableId, sessionId: updated.sessionId });
+  emitEvent("kds.updated", { orderId, tableId: updated.tableId });
+  emitEvent("floor.updated", { tableId: updated.tableId });
+  return updated;
 }
 
 /** Fire the held entrees so the whole table lands together. */

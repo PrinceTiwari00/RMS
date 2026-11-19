@@ -114,6 +114,12 @@ const DEFAULTS: Record<string, string> = {
   receipt_footer: "Thank you! Dhanyabad.",
   qr_ordering_enabled: "1",
   cfd_enabled: "1",
+  wifi_ssid: "Terai_Guest",
+  wifi_password: "terai2026",
+  qr_require_staff_approval: "1",
+  loyalty_reward_name: "Free Mango Lassi",
+  loyalty_reward_points: "200",
+  loyalty_points_per_100: "10",
   stations: "",
 };
 
@@ -162,6 +168,7 @@ const BOOLEAN_KEYS = new Set([
   "delivery_auto_accept",
   "qr_ordering_enabled",
   "cfd_enabled",
+  "qr_require_staff_approval",
 ]);
 
 function num(value: string | undefined, fallback: number): number {
@@ -250,6 +257,12 @@ export function getSettings(): Settings {
     receiptFooter: read("receipt_footer"),
     qrOrderingEnabled: bool(read("qr_ordering_enabled"), true),
     cfdEnabled: bool(read("cfd_enabled"), true),
+    wifiSsid: read("wifi_ssid"),
+    wifiPassword: read("wifi_password"),
+    qrRequireStaffApproval: bool(read("qr_require_staff_approval"), true),
+    loyaltyRewardName: read("loyalty_reward_name"),
+    loyaltyRewardPoints: Math.max(10, Math.round(num(read("loyalty_reward_points"), 200))),
+    loyaltyPointsPer100: Math.max(1, Math.round(num(read("loyalty_points_per_100"), 10))),
   };
 }
 
@@ -367,6 +380,9 @@ export function validateSetting(key: string, value: string): void {
     const tips = value.split(",").filter(Boolean);
     if (tips.length > 8) throw badRequest("Use at most eight tip presets");
     for (const tip of tips) finite(tip, "Tip preset", 0, 100);
+  }
+  if (["loyalty_reward_points", "loyalty_points_per_100"].includes(key)) {
+    finite(value, key.replaceAll("_", " "), 1, 100000);
   }
   if (["operating_hours", "service_periods", "tax_rules", "surcharges", "printers", "kds_routing", "payment_terminals"].includes(key)) {
     validateJson(key, value);

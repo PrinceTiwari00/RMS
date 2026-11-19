@@ -60,6 +60,16 @@ export function buildMetrics(): Metrics {
     )?.total ?? 0,
   );
   const purchasing = purchasingSummary();
+  const openHelpRequests = Number(
+    get<{ n: number }>("SELECT COUNT(*) AS n FROM service_requests WHERE status IN ('open','acknowledged')")?.n ?? 0,
+  );
+  const pendingQrOrders = Number(
+    get<{ n: number }>("SELECT COUNT(*) AS n FROM orders WHERE status IN ('open','sent') AND approval_status = 'pending_staff'")?.n ?? 0,
+  );
+  const reviewStats = get<{ avg: number | null; n: number }>(
+    "SELECT AVG(rating) AS avg, COUNT(*) AS n FROM guest_reviews",
+  );
+  const floorHealth = openHelpRequests === 0 && kds.lateTickets === 0 ? "ALL TABLES OK" : "ATTENTION";
 
   return {
     salesToday: Math.round(Number(sales.gross_sales)),
@@ -85,6 +95,11 @@ export function buildMetrics(): Metrics {
     staffClockedIn: labor.clockedInNow,
     openPoCount: purchasing.draft + purchasing.approved + purchasing.sent,
     wasteToday: Math.round(waste),
+    openHelpRequests,
+    pendingQrOrders,
+    avgReviewRating: reviewStats?.avg ? Math.round(Number(reviewStats.avg) * 10) / 10 : 0,
+    reviewCount: Number(reviewStats?.n ?? 0),
+    floorHealth,
   };
 }
 

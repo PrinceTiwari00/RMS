@@ -27,10 +27,13 @@ import {
 } from "@/server/floor";
 import { bool, has, int, num, nullableStr, optStr, q, qInt, str } from "@/server/coerce";
 import { ALLOWED_TRANSITIONS, TABLE_STATUSES, type TableStatus } from "@/domain/tables";
+import { acknowledgeServiceRequest, getActiveServiceRequests, resolveServiceRequest } from "@/server/engagement";
+import { getActiveOrders } from "@/server/orders";
 
 route("GET", "floor", null, ({ query }) => {
   const section = q(query, "section");
   const tables = getTables();
+  const pendingQrOrders = getActiveOrders().filter((order) => order.approvalStatus === "pending_staff");
   return {
     sections: getSections(),
     tables: section ? tables.filter((table) => table.sectionId === section || table.sectionName === section) : tables,
@@ -38,8 +41,18 @@ route("GET", "floor", null, ({ query }) => {
     servers: getServers(),
     transitions: ALLOWED_TRANSITIONS,
     statuses: TABLE_STATUSES,
+    serviceRequests: getActiveServiceRequests(),
+    pendingQrOrders,
   };
 });
+
+route("POST", "floor/requests/:id/acknowledge", "host.seat", ({ params, user }) => ({
+  request: acknowledgeServiceRequest(params.id, user),
+}));
+
+route("POST", "floor/requests/:id/resolve", "host.seat", ({ params, user }) => ({
+  request: resolveServiceRequest(params.id, user),
+}));
 
 route("GET", "floor/tables/:id", null, ({ params }) => {
   const table = getTable(params.id);

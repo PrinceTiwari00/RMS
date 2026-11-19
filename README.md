@@ -117,6 +117,12 @@ staff. Both the platform console and `/admin/users` show seat usage. Sign-in on
 the PIN pad and the platform console is rate limited (five failures → 15 minute
 block). See **[docs/MULTI_TENANT.md](docs/MULTI_TENANT.md)**.
 
+## Hosting on Render
+
+See **[docs/RENDER_DEPLOYMENT.md](docs/RENDER_DEPLOYMENT.md)** and `render.yaml` for
+one-click Blueprint deployment (Node `22.22.3`, `/var/data` persistent disk,
+auto-generated secrets, and `/api/health` check) as well as a Free-tier demo setup.
+
 ## Single-instance AWS deployment
 
 The repository includes a non-root production Dockerfile, single-container

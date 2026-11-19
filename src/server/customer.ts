@@ -1,19 +1,29 @@
 /**
- * Customer-facing service — QR table ordering and the Customer Facing Display.
- *
- * A guest never authenticates. Their whole authority is the table token printed
- * on the QR sticker: it maps to one table and can only add lines to that table's
- * open ticket. Paying from the phone goes through the same checkout path as the
- * POS, so totals, tips and stock deduction behave identically.
+ * Customer-facing service — QR table sessions, digital menu, staff-approved orders,
+ * waiter calls, split billing, loyalty rewards, quiz, reviews, and CFD.
  */
 import QRCode from "qrcode";
 import { all, get, run, tx, uuid } from "@/db/client";
 import { badRequest, notFound } from "@/server/router";
 import { audit } from "@/server/audit";
+import { emitEvent } from "@/server/events";
+import { isDemoMode } from "@/lib/session";
 import { getSettings, stationName } from "@/server/settings";
 import { getCategories, getMenu, validateModifierSelection } from "@/server/menu";
-import { addLine, createOrder, requireOrder, sendToKitchen, getActiveOrders } from "@/server/orders";
-import { closeCheck } from "@/server/checkout";
+import { addLine, applyDiscount, createOrder, requireOrder, sendToKitchen, getActiveOrders } from "@/server/orders";
+import { buildReceipt, closeCheck, tenderLabel } from "@/server/checkout";
+import { deductForOrder } from "@/server/inventory";
+import {
+  awardPointsForOrder,
+  closeTableSession,
+  createServiceRequest,
+  dispatchEmailReceipt,
+  ensureActiveSession,
+  getActiveSession,
+  getReviewForOrder,
+  getTableServiceRequests,
+  joinTableGuest,
+} from "@/server/engagement";
 import { buildEmvQr, tableMenuUrl } from "@/domain/qr";
 import { priceOrder } from "@/domain/pricing";
 import { businessDateNow, nowStamp } from "@/domain/time";
@@ -74,18 +84,55 @@ export function rotateQrToken(token: string, actor: SessionUser | null): QrToken
   return getQrTokens().find((entry) => entry.token === next)!;
 }
 
+/**
+ * Resolve either an opaque QR sticker token (`t16-t5`) or a short table label (`t5`, `T5`, `m1`).
+ */
+export function resolveToken(rawToken: string): { token: string; tableId: string | null; tableLabel: string; isActive: boolean } | null {
+  const direct = get<{ token: string; table_id: string | null; is_active: number; label: string | null }>(
+    "SELECT q.token, q.table_id, q.is_active, t.label FROM qr_tokens q LEFT JOIN tables t ON t.id = q.table_id WHERE q.token = ?",
+    rawToken,
+  );
+  if (direct) {
+    return {
+      token: direct.token,
+      tableId: direct.table_id,
+      tableLabel: direct.label ?? "Your table",
+      isActive: Boolean(direct.is_active),
+    };
+  }
+  const byLabel = get<{ token: string; table_id: string | null; is_active: number; label: string }>(
+    `SELECT q.token, q.table_id, q.is_active, t.label
+       FROM tables t
+       LEFT JOIN qr_tokens q ON q.table_id = t.id AND q.is_active = 1
+      WHERE LOWER(t.label) = LOWER(?)
+      ORDER BY q.created_at DESC LIMIT 1`,
+    rawToken,
+  );
+  if (!byLabel) return null;
+  if (!byLabel.token) {
+    // Auto-issue a token if table exists without an active sticker yet.
+    const created = createQrToken(byLabel.table_id ?? "", null);
+    return { token: created.token, tableId: created.tableId, tableLabel: byLabel.label, isActive: true };
+  }
+  return {
+    token: byLabel.token,
+    tableId: byLabel.table_id,
+    tableLabel: byLabel.label,
+    isActive: Boolean(byLabel.is_active),
+  };
+}
+
 export function recordScan(token: string): void {
-  run("UPDATE qr_tokens SET scans = scans + 1 WHERE token = ?", token);
+  const resolved = resolveToken(token);
+  if (!resolved) return;
+  run("UPDATE qr_tokens SET scans = scans + 1 WHERE token = ?", resolved.token);
 }
 
 export function requireToken(token: string): { token: string; tableId: string | null; tableLabel: string } {
-  const row = get<{ token: string; table_id: string | null; is_active: number; label: string | null }>(
-    "SELECT q.token, q.table_id, q.is_active, t.label FROM qr_tokens q LEFT JOIN tables t ON t.id = q.table_id WHERE q.token = ?",
-    token,
-  );
+  const row = resolveToken(token);
   if (!row) throw notFound("That table code is not recognised");
-  if (!row.is_active) throw badRequest("That table code has been disabled — please ask your server");
-  return { token: row.token, tableId: row.table_id, tableLabel: row.label ?? "Your table" };
+  if (!row.isActive) throw badRequest("That table code has been disabled — please ask your server");
+  return { token: row.token, tableId: row.tableId, tableLabel: row.tableLabel };
 }
 
 /** Render a QR as an inline data URI: the preview iframe has no network access. */
@@ -99,38 +146,114 @@ export async function qrDataUrl(text: string, size = 240): Promise<string> {
 }
 
 // ----------------------------------------------------------------- guest session
-/** The open ticket belonging to a table's QR session, if the guest has started one. */
-export function guestOrder(token: string): OrderSnapshot | null {
-  const open = all<{ id: string; status: string }>(
-    "SELECT id, status FROM orders WHERE qr_token = ? AND status IN ('open','sent') ORDER BY created_at DESC LIMIT 1",
-    token,
+/** The open (or most recently closed) ticket belonging to a table's QR session. */
+export function guestOrder(token: string, includeRecentClosed = false): OrderSnapshot | null {
+  const resolved = resolveToken(token);
+  const canonical = resolved?.token ?? token;
+  const open = resolved?.tableId
+    ? all<{ id: string }>(
+        "SELECT id FROM orders WHERE (qr_token = ? OR table_id = ?) AND status IN ('open','sent') ORDER BY created_at DESC LIMIT 1",
+        canonical,
+        resolved.tableId,
+      )
+    : all<{ id: string }>(
+        "SELECT id FROM orders WHERE qr_token = ? AND status IN ('open','sent') ORDER BY created_at DESC LIMIT 1",
+        canonical,
+      );
+  if (open.length) return requireOrder(open[0].id);
+
+  if (includeRecentClosed) {
+    const closed = resolved?.tableId
+      ? get<{ id: string }>(
+          "SELECT id FROM orders WHERE (qr_token = ? OR table_id = ?) AND status = 'closed' ORDER BY closed_at DESC LIMIT 1",
+          canonical,
+          resolved.tableId,
+        )
+      : get<{ id: string }>(
+          "SELECT id FROM orders WHERE qr_token = ? AND status = 'closed' ORDER BY closed_at DESC LIMIT 1",
+          canonical,
+        );
+    if (closed) return requireOrder(closed.id);
+  }
+  return null;
+}
+
+/** Estimate remaining prep seconds from the active KDS queue & item prep_minutes. */
+export function estimatePrepTime(order: OrderSnapshot | null): { totalSeconds: number; remainingSeconds: number } {
+  if (!order || order.status === "closed" || order.allReady) {
+    return { totalSeconds: 0, remainingSeconds: 0 };
+  }
+  const unready = order.activeItems.filter((line) => line.kdsStatus !== "READY");
+  if (!unready.length) return { totalSeconds: 0, remainingSeconds: 0 };
+
+  const itemIds = unready.map((line) => line.menuItemId).filter((id): id is string => Boolean(id));
+  let maxPrepMin = 12;
+  if (itemIds.length) {
+    const placeholders = itemIds.map(() => "?").join(",");
+    const row = get<{ max_prep: number }>(
+      `SELECT COALESCE(MAX(prep_minutes), 12) AS max_prep FROM menu_items WHERE id IN (${placeholders})`,
+      ...itemIds,
+    );
+    maxPrepMin = Math.max(4, Number(row?.max_prep ?? 12));
+  }
+
+  // Account for active queue backlog ahead of this ticket.
+  const queueRow = get<{ pending: number }>(
+    "SELECT COUNT(*) AS pending FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.status = 'sent' AND oi.is_void = 0 AND oi.kds_status = 'PENDING' AND o.id != ?",
+    order.id,
   );
-  return open.length ? requireOrder(open[0].id) : null;
+  const queuePenaltyMin = Math.min(8, Math.floor(Number(queueRow?.pending ?? 0) / 4));
+  const totalSeconds = (maxPrepMin + queuePenaltyMin) * 60;
+
+  if (order.status === "open" || !order.sentAt) {
+    return { totalSeconds, remainingSeconds: totalSeconds };
+  }
+  const iso = order.sentAt.includes("T") ? order.sentAt : `${order.sentAt.replace(" ", "T")}Z`;
+  const sentMs = Date.parse(iso);
+  const elapsedSec = Number.isNaN(sentMs) ? 0 : Math.max(0, Math.floor((Date.now() - sentMs) / 1000));
+  const remainingSeconds = Math.max(30, totalSeconds - elapsedSec);
+  return { totalSeconds, remainingSeconds };
+}
+
+export function paidBreakdown(order: OrderSnapshot | null): { paidAmount: number; remainingDue: number } {
+  if (!order) return { paidAmount: 0, remainingDue: 0 };
+  const paidAmount = order.tenders
+    .filter((t) => t.status !== "refunded")
+    .reduce((sum, t) => sum + Math.max(0, t.amount), 0);
+  const remainingDue = order.status === "closed" ? 0 : Math.max(0, order.total - paidAmount);
+  return { paidAmount, remainingDue };
 }
 
 export async function guestView(token: string, baseUrl = ""): Promise<GuestOrderView> {
   const resolved = requireToken(token);
   const settings = getSettings();
   if (!settings.qrOrderingEnabled) throw badRequest("QR self-ordering is turned off at this venue");
-  const order = guestOrder(token);
+
+  const session = resolved.tableId ? ensureActiveSession(resolved.tableId, resolved.token) : null;
+  const order = guestOrder(resolved.token);
+  const { paidAmount, remainingDue } = paidBreakdown(order);
+  const prep = estimatePrepTime(order);
+  const activeRequests = resolved.tableId ? getTableServiceRequests(resolved.tableId) : [];
 
   const payload = order
     ? buildEmvQr({
         merchantName: settings.restaurantName,
-        merchantCity: settings.address.split(",").pop()?.trim() ?? "Birgunj",
-        amount: order.total,
-        reference: order.checkNumber ? `CHK${order.checkNumber}` : token,
+        merchantCity: settings.address.split(",").pop()?.trim() || "Birgunj",
+        amount: remainingDue || order.total,
+        reference: order.checkNumber ? `CHK${order.checkNumber}` : resolved.token,
       })
     : buildEmvQr({
         merchantName: settings.restaurantName,
         merchantCity: "Birgunj",
         amount: 0,
-        reference: token,
+        reference: resolved.token,
         initiation: "11",
       });
 
+  void baseUrl;
   return {
-    token,
+    token: resolved.token,
+    tableId: resolved.tableId,
     tableLabel: resolved.tableLabel,
     restaurantName: settings.restaurantName,
     tagline: settings.tagline,
@@ -139,8 +262,15 @@ export async function guestView(token: string, baseUrl = ""): Promise<GuestOrder
     categories: getCategories(),
     menu: getMenu({ onlyAvailable: true }),
     settings,
+    session,
     order,
     paymentQr: await qrDataUrl(payload),
+    activeRequests,
+    estimatedRemainingSeconds: prep.remainingSeconds,
+    estimatedTotalSeconds: prep.totalSeconds,
+    paidAmount,
+    remainingDue,
+    review: order ? getReviewForOrder(order.id) : null,
   };
 }
 
@@ -149,61 +279,148 @@ export interface GuestLineInput {
   quantity?: number;
   modifiers?: string[];
   note?: string;
+  upsellItemId?: string | null;
 }
 
 /**
- * Add a guest's selections to the table's QR ticket, opening one on first use.
- * Modifiers are validated server-side — the phone cannot post an illegal combo.
+ * Add a guest's selections to the table's QR ticket, opening a session & ticket on first use.
+ * When `qrRequireStaffApproval` is enabled, the ticket waits in the Staff Console queue until
+ * staff taps "Send to kitchen".
  */
-export function submitGuestOrder(token: string, lines: GuestLineInput[]): { order: OrderSnapshot; sentToKitchen: boolean } {
+export function submitGuestOrder(
+  token: string,
+  lines: GuestLineInput[],
+  meta: { guestId?: string | null; guestName?: string } = {},
+): { order: OrderSnapshot; sentToKitchen: boolean; requiresStaffApproval: boolean } {
   const resolved = requireToken(token);
   if (!Array.isArray(lines) || !lines.length) throw badRequest("Choose at least one item");
 
-  let order = guestOrder(token);
+  const settings = getSettings();
+  const requireApproval = settings.qrRequireStaffApproval;
+  const session = resolved.tableId ? ensureActiveSession(resolved.tableId, resolved.token) : null;
+  const menuItems = new Map(getMenu({ onlyAvailable: true }).map((m) => [m.id, m]));
+
+  let order = guestOrder(resolved.token);
+  const guestDisplay = meta.guestName?.trim() || (session?.guests[0]?.name ?? `Table ${resolved.tableLabel}`);
+
   if (!order) {
     const table = resolved.tableId ? get<{ guests: number }>("SELECT guests FROM tables WHERE id = ?", resolved.tableId) : null;
+    const guestCount = Math.max(table?.guests ?? 0, session?.guests.length ?? 0, 2);
     order = createOrder({
       tableId: resolved.tableId,
-      guests: table?.guests ?? 2,
+      guests: guestCount,
       channel: "qr",
-      qrToken: token,
-      guestName: `Table ${resolved.tableLabel}`,
+      qrToken: resolved.token,
+      sessionId: session?.id ?? null,
+      guestId: meta.guestId ?? null,
+      approvalStatus: requireApproval ? "pending_staff" : "approved",
+      guestName: guestDisplay,
       note: "QR self-order",
     });
     if (resolved.tableId) {
-      run("UPDATE tables SET status = CASE WHEN status = 'available' THEN 'ordered' ELSE status END WHERE id = ?", resolved.tableId);
+      run(
+        "UPDATE tables SET status = CASE WHEN status = 'available' THEN 'seated' ELSE status END, guests = MAX(guests, ?), seated_at = COALESCE(seated_at, ?) WHERE id = ?",
+        guestCount,
+        nowStamp(),
+        resolved.tableId,
+      );
     }
   }
   if (order.status === "closed") throw badRequest("That ticket has already been paid");
 
+  const alreadySent = order.status === "sent";
+  let upsellDiscountTotal = 0;
+
   for (const line of lines) {
     if (!line?.menuItemId) throw badRequest("Every line needs a menu item");
-    // Validate up front so one bad combo does not half-add the cart.
     validateModifierSelection(line.menuItemId, line.modifiers ?? []);
+    const qty = Math.max(1, Math.round(Number(line.quantity ?? 1)));
     addLine(order.id, {
       menuItemId: line.menuItemId,
-      quantity: line.quantity,
+      quantity: qty,
       modifiers: line.modifiers,
       note: line.note,
+      holdForApproval: alreadySent && requireApproval,
     });
+
+    if (line.upsellItemId) {
+      const parent = menuItems.get(line.menuItemId);
+      const upsell = parent?.upsellItem;
+      if (upsell && upsell.id === line.upsellItemId) {
+        validateModifierSelection(upsell.id, []);
+        addLine(order.id, {
+          menuItemId: upsell.id,
+          quantity: qty,
+          modifiers: [],
+          note: `Pairing deal (${upsell.discountPercent}% off with ${parent.name})`,
+          holdForApproval: alreadySent && requireApproval,
+        });
+        upsellDiscountTotal += Math.max(0, upsell.price - upsell.discountedPrice) * qty;
+      }
+    }
   }
 
-  // Fire the ticket straight to the kitchen — there is no server to press send.
-  const sent = sendToKitchen(order.id, null);
-  return { order: sent, sentToKitchen: true };
+  if (upsellDiscountTotal > 0) {
+    applyDiscount(
+      order.id,
+      {
+        kind: "amount",
+        value: upsellDiscountTotal,
+        reason: "Combo pairing deal",
+      },
+      null,
+    );
+  }
+
+  if (!requireApproval && order.status === "open") {
+    const sent = sendToKitchen(order.id, null, { fireAllCourses: true });
+    emitEvent("floor.updated", { tableId: resolved.tableId });
+    return { order: sent, sentToKitchen: true, requiresStaffApproval: false };
+  }
+
+  const latest = requireOrder(order.id);
+  emitEvent("order.created", { orderId: latest.id, tableId: resolved.tableId, sessionId: session?.id ?? null });
+  emitEvent("floor.updated", { tableId: resolved.tableId });
+  return {
+    order: latest,
+    sentToKitchen: latest.status === "sent" && latest.approvalStatus === "approved",
+    requiresStaffApproval: requireApproval,
+  };
 }
 
-/** Pay from the phone: wallets and cards only, no cash drawer involved. */
+/**
+ * Pay from the phone: supports both single full payment and split-share partial payments.
+ */
 export function payGuestOrder(
   token: string,
   orderId: string,
-  tender: { method: string; amount?: number; tip?: number },
-): { order: OrderSnapshot; receipt: { label: string; value: string; emphasis?: boolean }[] } {
+  tender: {
+    method: string;
+    amount?: number;
+    tip?: number;
+    label?: string;
+    guestId?: string | null;
+    guestName?: string;
+    email?: string;
+  },
+): {
+  order: OrderSnapshot;
+  paidInFull: boolean;
+  paidAmount: number;
+  remainingDue: number;
+  pointsEarned: number;
+  emailSent: { recipientEmail: string; status: string } | null;
+  receipt: { label: string; value: string; emphasis?: boolean }[];
+} {
   const resolved = requireToken(token);
   const order = requireOrder(orderId);
-  if (order.qrToken !== token) throw badRequest("That ticket does not belong to this table");
+  if (order.qrToken !== resolved.token && order.tableId !== resolved.tableId) {
+    throw badRequest("That ticket does not belong to this table");
+  }
   if (order.status === "closed") throw badRequest("That ticket has already been paid");
-  if (tender.method === "cash" || tender.method === "comp") throw badRequest("Cash and comp payments must be taken at the counter");
+  if (tender.method === "cash" || tender.method === "comp") {
+    throw badRequest("Cash and comp payments must be taken at the counter");
+  }
 
   const settings = getSettings();
   const pricing = priceOrder(
@@ -217,34 +434,169 @@ export function payGuestOrder(
     { vatRate: settings.vatRate, vatInclusive: settings.vatInclusive, serviceChargeRate: settings.serviceChargeRate },
   );
 
-  const result = closeCheck(
-    orderId,
-    {
-      tenders: [
-        {
-          method: tender.method,
-          amount: tender.amount ?? pricing.total,
-          tip: tender.tip ?? 0,
-          label: `QR · ${resolved.tableLabel}`,
-          authCode: `QR${Math.floor(Math.random() * 900000 + 100000)}`,
-        },
-      ],
-      note: "Paid from the table QR",
-    },
-    null,
-  );
-  return { order: requireOrder(orderId), receipt: result.receipt };
+  const alreadyPaid = order.tenders
+    .filter((t) => t.status !== "refunded")
+    .reduce((sum, t) => sum + Math.max(0, t.amount), 0);
+  const currentRemaining = Math.max(0, pricing.total - alreadyPaid);
+  const payAmount = Math.min(currentRemaining, Math.max(1, Math.round(Number(tender.amount ?? currentRemaining))));
+  const tipAmount = Math.max(0, Math.round(Number(tender.tip ?? 0)));
+  const label = tender.label?.trim() || `${tender.guestName?.trim() || resolved.tableLabel} · QR`;
+
+  const isFinal = payAmount >= currentRemaining;
+
+  // Fast-path when no prior partial payments exist and this pays the full bill.
+  if (isFinal && alreadyPaid === 0) {
+    const result = closeCheck(
+      orderId,
+      {
+        force: true,
+        tenders: [
+          {
+            method: tender.method,
+            amount: currentRemaining,
+            tip: tipAmount,
+            label,
+            authCode: `QR${Math.floor(Math.random() * 900000 + 100000)}`,
+          },
+        ],
+        note: "Paid from the table QR",
+      },
+      null,
+    );
+    if (resolved.tableId) closeTableSession(resolved.tableId);
+    const pointsEarned = awardPointsForOrder(orderId, result.total, tender.guestId);
+    const closedOrder = requireOrder(orderId);
+    let emailSent: { recipientEmail: string; status: string } | null = null;
+    if (tender.email?.trim()) {
+      const dispatched = dispatchEmailReceipt(closedOrder, tender.email, isDemoMode());
+      emailSent = { recipientEmail: dispatched.recipientEmail, status: dispatched.status };
+    }
+    emitEvent("payment.updated", { orderId, tableId: resolved.tableId });
+    emitEvent("floor.updated", { tableId: resolved.tableId });
+    return {
+      order: closedOrder,
+      paidInFull: true,
+      paidAmount: result.total,
+      remainingDue: 0,
+      pointsEarned,
+      emailSent,
+      receipt: result.receipt,
+    };
+  }
+
+  const businessDate = order.businessDate ?? businessDateNow();
+  const stamp = nowStamp();
+
+  tx(() => {
+    run(
+      `INSERT INTO payments (id, order_id, method, amount, tip, status, label, auth_code, created_at, business_date)
+       VALUES (?, ?, ?, ?, ?, 'captured', ?, ?, ?, ?)`,
+      uuid(),
+      orderId,
+      tender.method,
+      payAmount,
+      tipAmount,
+      label,
+      `QR${Math.floor(Math.random() * 900000 + 100000)}`,
+      stamp,
+      businessDate,
+    );
+
+    if (isFinal) {
+      const allTenders = all<{ amount: number; tip: number }>(
+        "SELECT amount, tip FROM payments WHERE order_id = ? AND status != 'refunded'",
+        orderId,
+      );
+      const totalTips = allTenders.reduce((sum, t) => sum + Number(t.tip ?? 0), 0);
+      run(
+        `UPDATE orders SET status = 'closed', subtotal = ?, discount = ?, vat = ?, service_charge = ?, tip = ?, total = ?,
+           closed_at = ?, approval_status = 'approved', business_date = ?
+          WHERE id = ? AND status IN ('open','sent')`,
+        pricing.subtotal,
+        pricing.discount,
+        pricing.vat,
+        pricing.serviceCharge,
+        totalTips,
+        pricing.total + totalTips,
+        stamp,
+        businessDate,
+        orderId,
+      );
+      deductForOrder(orderId, null);
+      if (order.tableId) {
+        run("UPDATE tables SET status = 'dirty', guests = 0, seated_at = NULL WHERE id = ?", order.tableId);
+      }
+    }
+  });
+
+  if (isFinal && resolved.tableId) {
+    closeTableSession(resolved.tableId);
+  }
+  const updated = requireOrder(orderId);
+  const { paidAmount: nowPaid, remainingDue: nowDue } = paidBreakdown(updated);
+  const pointsEarned = isFinal ? awardPointsForOrder(orderId, pricing.total, tender.guestId) : 0;
+
+  let emailSent: { recipientEmail: string; status: string } | null = null;
+  if (isFinal && tender.email?.trim()) {
+    const dispatched = dispatchEmailReceipt(updated, tender.email, isDemoMode());
+    emailSent = { recipientEmail: dispatched.recipientEmail, status: dispatched.status };
+  }
+
+  emitEvent("payment.updated", { orderId, tableId: resolved.tableId });
+  emitEvent("floor.updated", { tableId: resolved.tableId });
+
+  const totalTips = updated.tenders.reduce((sum, t) => sum + t.tip, 0);
+  const receiptTenders = updated.tenders.map((t) => ({
+    ...t,
+    authCode: t.authCode ?? undefined,
+    last4: t.last4 ?? undefined,
+  }));
+  const receipt = isFinal
+    ? buildReceipt(updated, pricing, receiptTenders, settings.receiptFooter, totalTips)
+    : [
+        { label: settings.restaurantName, value: "", emphasis: true },
+        { label: `Partial payment · ${label}`, value: `Rs ${(payAmount / 100).toFixed(2)}` },
+        { label: "Remaining balance", value: `Rs ${(nowDue / 100).toFixed(2)}`, emphasis: true },
+      ];
+
+  return {
+    order: updated,
+    paidInFull: isFinal,
+    paidAmount: nowPaid,
+    remainingDue: nowDue,
+    pointsEarned,
+    emailSent,
+    receipt,
+  };
+}
+
+export function guestJoinSession(token: string, input: { name: string; guestId?: string | null }) {
+  const resolved = requireToken(token);
+  if (!resolved.tableId) throw badRequest("This QR code is not assigned to a table");
+  return joinTableGuest(resolved.tableId, resolved.token, input);
+}
+
+export function guestCallWaiter(
+  token: string,
+  input: { requestType?: string; guestId?: string | null; guestName?: string; note?: string },
+) {
+  const resolved = requireToken(token);
+  if (!resolved.tableId) throw badRequest("This QR code is not assigned to a table");
+  const session = getActiveSession(resolved.tableId);
+  return createServiceRequest({
+    tableId: resolved.tableId,
+    sessionId: session?.id ?? null,
+    guestId: input.guestId ?? null,
+    guestName: input.guestName,
+    requestType: input.requestType,
+    note: input.note,
+  });
 }
 
 // --------------------------------------------------------------------------- CFD
-/**
- * The secondary display beside the till. It shows whichever ticket the cashier
- * is currently ringing, live line by line, plus a payment QR for the amount due.
- */
 export async function cfdView(terminalId = "term-pos-1", baseUrl = ""): Promise<CfdView & { paymentQr: string }> {
   const settings = getSettings();
   const active = getActiveOrders().filter((order) => order.terminalId === terminalId || !order.terminalId);
-  // The most recently touched ticket is the one on the till right now.
   const order = active.sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt))[0] ?? null;
 
   const promotions = all<{ emoji: string; name: string; price: number; description: string }>(
@@ -278,10 +630,15 @@ export async function cfdView(terminalId = "term-pos-1", baseUrl = ""): Promise<
 }
 
 /** Absolute table-menu URL for printing stickers in the admin portal. */
-export function qrStickers(baseUrl = ""): { token: string; tableLabel: string; url: string }[] {
-  return getQrTokens()
-    .filter((token) => token.isActive)
-    .map((token) => ({ token: token.token, tableLabel: token.tableLabel, url: tableMenuUrl(baseUrl, token.token) }));
+export async function qrStickers(baseUrl = ""): Promise<{ token: string; tableLabel: string; url: string; dataUrl: string }[]> {
+  const active = getQrTokens().filter((token) => token.isActive);
+  return Promise.all(
+    active.map(async (token) => {
+      const url = tableMenuUrl(baseUrl, token.token);
+      const dataUrl = await QRCode.toDataURL(url || `/t/${token.token}`, { width: 220, margin: 1 });
+      return { token: token.token, tableLabel: token.tableLabel, url, dataUrl };
+    }),
+  );
 }
 
-export { stationName, businessDateNow };
+export { stationName, businessDateNow, tenderLabel };
